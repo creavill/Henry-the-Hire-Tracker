@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """
-Job Tracker - Local Version
-Enhanced with AI-based filtering and baseline scoring
+Henry the Hire Tracker - Local Application
+AI-powered job tracking system with Gmail integration and Chrome extension support.
+
+This application:
+- Scans Gmail for job alerts from LinkedIn, Indeed, and other job boards
+- Uses Claude AI to analyze job fit against your resume(s)
+- Provides a web dashboard for tracking applications
+- Integrates with a Chrome extension for instant job analysis
+- Generates tailored cover letters and interview prep answers
+
+Configuration is loaded from config.yaml for easy personalization.
 """
 
 import os
@@ -13,36 +22,50 @@ import hashlib
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
 import urllib.request
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-# Load environment variables
+# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-# Flask for web UI
+# Configuration loader for user preferences
+from config_loader import get_config
+
+# Flask web framework for dashboard UI
 from flask import Flask, render_template_string, jsonify, request
 from flask_cors import CORS
 
-# Google API
+# Google Gmail API for email scanning
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# HTML parsing
+# HTML parsing for job email extraction
 from bs4 import BeautifulSoup
 
-# Anthropic
+# Anthropic Claude AI for job analysis
 import anthropic
 
 # ============== Configuration ==============
+# Load user configuration from config.yaml
+try:
+    CONFIG = get_config()
+except FileNotFoundError as e:
+    print(f"\n❌ Configuration Error: {e}")
+    print("📝 Copy config.example.yaml to config.yaml and fill in your information.\n")
+    exit(1)
+
+# Application directories
 APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "jobs.db"
 RESUMES_DIR = APP_DIR / "resumes"
 CREDENTIALS_FILE = APP_DIR / "credentials.json"
 TOKEN_FILE = APP_DIR / "token.json"
+
+# Gmail API scope for read-only access
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 # WeWorkRemotely RSS Feeds
@@ -57,7 +80,27 @@ CORS(app)
 
 # ============== URL Cleaning ==============
 def clean_job_url(url: str) -> str:
-    """Remove tracking parameters from job URLs."""
+    """
+    Remove tracking parameters from job URLs to prevent duplicate entries.
+
+    Job boards add tracking parameters (tracking IDs, referral codes, etc.) that make
+    the same job appear as different URLs. This function normalizes URLs by:
+    - Extracting core job IDs from LinkedIn and Indeed
+    - Removing common tracking parameters (utm_*, refId, etc.)
+    - Preserving only essential query parameters
+
+    Args:
+        url: Raw job URL with potential tracking parameters
+
+    Returns:
+        Cleaned URL with tracking parameters removed
+
+    Examples:
+        LinkedIn: https://linkedin.com/jobs/view/123?refId=xyz&trk=email
+                  → https://linkedin.com/jobs/view/123
+        Indeed:   https://indeed.com/viewjob?jk=abc123&tk=xyz&from=email
+                  → https://indeed.com/viewjob?jk=abc123
+    """
     if not url:
         return url
     
@@ -103,9 +146,21 @@ def clean_job_url(url: str) -> str:
 
 # ============== Database ==============
 def init_db():
+    """
+    Initialize SQLite database with required tables.
+
+    Creates tables for:
+    - jobs: Main job listings with AI analysis and scoring
+    - scan_history: Track email scan timestamps to avoid re-processing
+    - watchlist: Companies to monitor for future openings
+    - followups: Interview and application follow-up tracking
+
+    Uses WAL (Write-Ahead Logging) mode for better concurrency when
+    multiple processes/threads access the database.
+    """
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
-    
-    # Enable WAL mode for better concurrency
+
+    # Enable WAL mode for better concurrency (allows simultaneous reads during writes)
     conn.execute("PRAGMA journal_mode=WAL")
     
     # Create tables if they don't exist
@@ -697,22 +752,77 @@ def scan_emails(days_back=7):
     return all_jobs
 
 # ============== AI Filtering & Scoring ==============
-def load_resumes():
+def load_resumes() -> str:
+    """
+    Load all resume files from configured paths.
+
+    Reads resume files specified in config.yaml and concatenates them
+    with separators for AI analysis. Supports both .txt and .md formats.
+
+    Returns:
+        Combined resume text from all configured files
+
+    Raises:
+        FileNotFoundError: If configured resume files don't exist
+    """
     resumes = []
-    if RESUMES_DIR.exists():
-        for f in RESUMES_DIR.glob('*.txt'):
-            resumes.append(f.read_text())
-        for f in RESUMES_DIR.glob('*.md'):
-            resumes.append(f.read_text())
+
+    # Load resumes from configured file paths
+    for resume_path in CONFIG.resume_files:
+        full_path = APP_DIR / resume_path
+        if full_path.exists():
+            resumes.append(full_path.read_text())
+        else:
+            print(f"⚠️  Warning: Resume file not found: {resume_path}")
+
+    if not resumes:
+        raise FileNotFoundError(
+            "No resume files found! Add resume files to the resumes/ directory "
+            "and configure them in config.yaml"
+        )
+
     return "\n\n---\n\n".join(resumes)
 
-def ai_filter_and_score(job, resume_text):
+
+def ai_filter_and_score(job: Dict, resume_text: str) -> Tuple[bool, int, str]:
     """
-    AI-based filtering and baseline scoring.
-    Returns: (should_keep: bool, baseline_score: int, reason: str)
+    AI-based job filtering and baseline scoring using Claude.
+
+    Uses Claude AI to:
+    1. Filter jobs by location preferences (from config.yaml)
+    2. Filter overly senior/junior roles based on experience level
+    3. Generate a baseline score (1-100) based on location, seniority, company, and tech stack
+
+    Jobs that don't match location preferences or are way outside experience level
+    are filtered out to reduce noise.
+
+    Args:
+        job: Job dictionary with title, company, location, and raw_text
+        resume_text: Combined text from all user's resumes
+
+    Returns:
+        Tuple of (should_keep, baseline_score, reason):
+        - should_keep: Boolean indicating if job passes filters
+        - baseline_score: Integer score from 1-100
+        - reason: String explanation of filtering decision
+
+    Example:
+        keep, score, reason = ai_filter_and_score(job, resume_text)
+        if keep:
+            print(f"Job scored {score}/100: {reason}")
     """
     client = anthropic.Anthropic()
-    
+
+    # Generate location filter prompt from user's config
+    location_filter = CONFIG.get_location_filter_prompt()
+
+    # Get experience level preferences
+    exp_level = CONFIG.experience_level
+    exclude_keywords = CONFIG.exclude_keywords
+
+    # Build exclusion keyword string for prompt
+    exclude_str = ", ".join(exclude_keywords) if exclude_keywords else "None"
+
     prompt = f"""Analyze this job for filtering and baseline scoring.
 
 CANDIDATE'S RESUME:
@@ -725,30 +835,29 @@ Location: {job['location']}
 Brief Description: {job['raw_text'][:500]}
 
 INSTRUCTIONS:
-1. LOCATION FILTER: Keep ONLY if location is:
-   - Remote (anywhere)
-   - California Remote / CA Remote
-   - San Diego or San Diego County areas (including: Poway, Carlsbad, Encinitas, La Jolla, Del Mar, Chula Vista, El Cajon, Oceanside, Escondido, Vista, Santee, National City, Imperial Beach, Coronado, Solana Beach, etc.)
-   - Hybrid with San Diego area option
-   
-2. SKILL LEVEL: Keep ALL levels but score appropriately:
-   - Entry-level/Junior with 0-2 years experience: Give lower score (30-50) but KEEP
-   - Mid-level matching resume: High score (60-85)
+1. LOCATION FILTER:
+{location_filter}
+
+2. TITLE FILTER: Auto-reject if title contains: {exclude_str}
+
+3. SKILL LEVEL: Keep ALL levels but score appropriately:
+   - Entry-level/Junior roles: Give lower score (30-50) but KEEP if candidate has {exp_level.get('min_years', 1)}+ years
+   - Mid-level matching candidate's {exp_level.get('current_level', 'mid')} level: High score (60-85)
    - Senior roles slightly above resume: Keep with moderate score (50-70)
-   - ONLY filter if extremely mismatched: VP/Director roles, or requires 15+ years when candidate has 2
-   
-3. BASELINE SCORE (1-100):
-   - Location: Remote=100, San Diego proper=95, SD County=90, CA Remote=85, Hybrid SD=85
+   - ONLY filter if extremely mismatched: VP/Director/C-level roles, or requires {exp_level.get('max_years', 10)}+ more years than candidate has
+
+4. BASELINE SCORE (1-100):
+   - Location: Use score bonuses from location preferences (Remote=100, primary city=95, etc.)
    - Seniority: Perfect match=+20, Entry-level=-15, Slightly senior=+0, Too senior=-30
-   - Company: Top tier (FAANG/unicorn)=+10, Startup=+5, Unknown=+0
+   - Company: Top tier (FAANG/unicorn)=+10, Well-known=+5, Startup=+3, Unknown=+0
    - Tech stack overlap: High=+15, Medium=+5, Low=-10
 
 Return JSON only:
 {{
     "keep": <bool>,
     "baseline_score": <1-100>,
-    "filter_reason": "kept: entry-level but acceptable" OR "filtered: VP role requires 15+ years",
-    "location_match": "remote|san_diego|san_diego_county|ca_remote|hybrid_sd|other",
+    "filter_reason": "kept: good location match" OR "filtered: outside target location",
+    "location_match": "remote|primary_location|secondary_location|excluded",
     "skill_level_match": "entry_level|good_fit|slightly_senior|too_senior"
 }}
 """
@@ -773,8 +882,31 @@ Return JSON only:
     # Default: keep but low score
     return (True, 30, "filter error - kept by default")
 
-def analyze_job(job, resume_text):
-    """Full job analysis (called after baseline)."""
+def analyze_job(job: Dict, resume_text: str) -> Dict:
+    """
+    Perform detailed job qualification analysis using Claude AI.
+
+    This is the "full analysis" that runs after a job passes baseline filtering.
+    Provides:
+    - Detailed qualification score (1-100)
+    - Specific strengths that match the role
+    - Gaps or missing requirements
+    - Honest recommendation on whether to apply
+    - Which resume variant to use
+
+    Args:
+        job: Job dictionary with title, company, location, and details
+        resume_text: Combined text from all user's resumes
+
+    Returns:
+        Dictionary containing:
+        - qualification_score: Detailed score from 1-100
+        - should_apply: Boolean recommendation
+        - strengths: List of matching skills/experience
+        - gaps: List of missing requirements
+        - recommendation: 2-3 sentence honest assessment
+        - resume_to_use: Which resume variant to submit (backend|cloud|fullstack)
+    """
     client = anthropic.Anthropic()
     
     prompt = f"""Analyze job fit with strict accuracy. Respond ONLY with valid JSON.
@@ -823,7 +955,28 @@ Return JSON:
         print(f"Analysis error: {e}")
         return {"qualification_score": 0, "should_apply": False, "recommendation": str(e)}
 
-def generate_cover_letter(job, resume_text):
+def generate_cover_letter(job: Dict, resume_text: str) -> str:
+    """
+    Generate a tailored cover letter using Claude AI.
+
+    Creates a personalized cover letter based on:
+    - Job requirements and company
+    - Candidate's resume and verified experience
+    - Previous AI analysis strengths
+
+    The cover letter follows professional best practices:
+    - 3-4 paragraphs, under 350 words
+    - Only cites actual resume content (no extrapolation)
+    - Includes specific examples and metrics
+    - Professional but enthusiastic tone
+
+    Args:
+        job: Job dictionary with title, company, location, and analysis
+        resume_text: Combined text from all user's resumes
+
+    Returns:
+        Formatted cover letter text ready to use
+    """
     client = anthropic.Anthropic()
     analysis = json.loads(job['analysis']) if job['analysis'] else {}
     
@@ -849,17 +1002,43 @@ Write the cover letter now:"""
     except Exception as e:
         return f"Error: {e}"
 
-# ============== Sorting ==============
-def calculate_weighted_score(baseline_score, email_date):
-    """70% qualification + 30% recency"""
-    # Recency score: 100 for today, decay over 30 days
+# ============== Scoring & Sorting ==============
+def calculate_weighted_score(baseline_score: int, email_date: str) -> float:
+    """
+    Calculate weighted score combining qualification and recency.
+
+    Jobs are sorted by a weighted score that considers both:
+    - How well you qualify (70% weight)
+    - How recent the posting is (30% weight)
+
+    This ensures high-quality matches rise to the top, while still
+    prioritizing newer opportunities over old ones.
+
+    Recency scoring:
+    - Posted today: 100 points
+    - Linear decay: Loses ~3.33 points per day
+    - After 30 days: 0 recency points
+
+    Args:
+        baseline_score: AI-generated qualification score (1-100)
+        email_date: ISO format date string when job was posted/received
+
+    Returns:
+        Weighted score as a float (e.g., 85.67)
+
+    Example:
+        - Job with score 90 posted today: 90*0.7 + 100*0.3 = 93.0
+        - Job with score 90 posted 10 days ago: 90*0.7 + 66.7*0.3 = 83.0
+    """
+    # Calculate recency score: 100 for today, linear decay to 0 over 30 days
     try:
         date_obj = datetime.fromisoformat(email_date)
         days_old = (datetime.now() - date_obj).days
-        recency_score = max(0, 100 - (days_old * 3.33))  # Linear decay over 30 days
+        recency_score = max(0, 100 - (days_old * 3.33))  # ~3.33 points lost per day
     except:
-        recency_score = 0
-    
+        recency_score = 0  # Default to 0 if date parsing fails
+
+    # 70% qualification, 30% recency
     weighted = (baseline_score * 0.7) + (recency_score * 0.3)
     return round(weighted, 2)
 
@@ -1777,9 +1956,26 @@ def delete_watchlist(watch_id):
     return jsonify({'success': True})
 
 if __name__ == '__main__':
+    # Initialize database
     init_db()
     RESUMES_DIR.mkdir(exist_ok=True)
-    print(f"\n📁 Put resumes in: {RESUMES_DIR}")
-    print(f"📁 Put credentials.json in: {APP_DIR}")
-    print(f"\n🚀 Starting HireTrack at http://localhost:5000\n")
+
+    # Display startup info
+    print("\n" + "="*60)
+    print("🎩 Henry the Hire Tracker - AI-Powered Job Search Assistant")
+    print("="*60)
+    print(f"\n👤 User: {CONFIG.user_name}")
+    print(f"📧 Email: {CONFIG.user_email}")
+    print(f"📄 Resumes loaded: {len(CONFIG.resume_files)}")
+    print(f"\n📁 Configuration: {APP_DIR / 'config.yaml'}")
+    print(f"📁 Database: {DB_PATH}")
+    print(f"📁 Gmail credentials: {CREDENTIALS_FILE}")
+    print(f"\n💡 To get started:")
+    print(f"   1. Click '📧 Scan Gmail' to import job alerts")
+    print(f"   2. Click '🤖 Analyze All' for AI analysis")
+    print(f"   3. Use the Chrome extension for instant analysis")
+    print(f"\n🚀 Dashboard running at: http://localhost:5000")
+    print("="*60 + "\n")
+
+    # Start Flask app
     app.run(debug=True, port=5000)

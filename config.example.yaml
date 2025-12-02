@@ -1,0 +1,169 @@
+# Henry the Hire Tracker - User Configuration
+# Copy this file to config.yaml and fill in your personal information
+
+# ===== USER PROFILE =====
+user:
+  name: "Your Name"
+  email: "your.email@example.com"
+  phone: "(555) 123-4567"
+  location: "Your City, State"
+
+  # Social/Professional Links
+  linkedin: "linkedin.com/in/yourprofile"
+  github: "github.com/yourusername"
+  website: "yourwebsite.com"
+  portfolio: ""  # Optional
+
+# ===== RESUME CONFIGURATION =====
+resumes:
+  # Path to your resume files (relative to project root or absolute paths)
+  # The system will use these for AI analysis
+  files:
+    - "resumes/backend_developer_resume.txt"
+    - "resumes/cloud_engineer_resume.txt"
+    - "resumes/fullstack_developer_resume.txt"
+
+  # Default resume to recommend if AI can't determine best fit
+  default: "fullstack"
+
+  # Resume variants and their focus areas (helps AI pick the right one)
+  variants:
+    backend:
+      focus: "Backend development, APIs, distributed systems"
+      file: "resumes/backend_developer_resume.txt"
+    cloud:
+      focus: "Cloud infrastructure, AWS, DevOps, IaC"
+      file: "resumes/cloud_engineer_resume.txt"
+    fullstack:
+      focus: "Full-stack development, React, Node.js, databases"
+      file: "resumes/fullstack_developer_resume.txt"
+
+# ===== JOB PREFERENCES =====
+preferences:
+  # Location filtering - jobs will be scored/filtered based on these preferences
+  locations:
+    # Primary target locations (highest priority)
+    primary:
+      - name: "Remote"
+        type: "remote"
+        score_bonus: 100  # Perfect match
+
+      - name: "San Diego, CA"
+        type: "city"
+        score_bonus: 95
+        # Include nearby areas/neighborhoods
+        includes:
+          - "Poway"
+          - "Carlsbad"
+          - "Encinitas"
+          - "La Jolla"
+          - "Del Mar"
+          - "Chula Vista"
+          - "El Cajon"
+          - "Oceanside"
+          - "Escondido"
+          - "Vista"
+          - "Santee"
+          - "National City"
+          - "Imperial Beach"
+          - "Coronado"
+          - "Solana Beach"
+
+    # Secondary acceptable locations
+    secondary:
+      - name: "California Remote"
+        type: "state_remote"
+        score_bonus: 85
+        keywords: ["CA Remote", "California Remote", "Remote (CA)"]
+
+      - name: "Hybrid - San Diego"
+        type: "hybrid"
+        score_bonus: 85
+        keywords: ["Hybrid", "Hybrid - San Diego"]
+
+    # Locations to filter out (leave empty to consider all locations)
+    excluded: []
+
+  # Salary expectations (optional - not currently used but available for future features)
+  salary:
+    minimum: 80000
+    target: 120000
+    currency: "USD"
+
+  # Job types
+  job_types:
+    - "Full-time"
+    - "Contract"
+    - "Contract-to-hire"
+
+  # Experience level (used for filtering overly senior or junior roles)
+  experience_level:
+    min_years: 1
+    max_years: 5
+    current_level: "mid"  # entry, mid, senior, lead, principal
+
+  # Automatic filtering rules
+  filters:
+    # Auto-reject jobs with these keywords in title/description
+    exclude_keywords:
+      - "Director"
+      - "VP"
+      - "Chief"
+      - "Head of"
+
+    # Minimum baseline score to keep (0-100)
+    min_baseline_score: 30
+
+    # Auto-mark as "interested" if score is above this threshold
+    auto_interest_threshold: 75
+
+# ===== EMAIL SCANNING =====
+email:
+  # How many days back to scan on first run
+  initial_scan_days: 7
+
+  # Additional email sources to scan (beyond default job boards)
+  custom_sources:
+    - from: "careers@example.com"
+      name: "Example Company Careers"
+    # Add more custom email sources here
+
+# ===== AI CONFIGURATION =====
+ai:
+  # Model to use for job analysis (default: claude-sonnet-4-20250514)
+  model: "claude-sonnet-4-20250514"
+
+  # Analysis strictness
+  strict_accuracy: true  # Only cite actual resume content, no extrapolation
+
+  # Cover letter preferences
+  cover_letter:
+    max_words: 350
+    tone: "professional"  # professional, enthusiastic, casual
+    include_metrics: true  # Include specific numbers/achievements from resume
+
+# ===== APPLICATION TRACKING =====
+tracking:
+  # Default status for new jobs
+  default_status: "new"
+
+  # Available statuses
+  statuses:
+    - "new"
+    - "interested"
+    - "applied"
+    - "interviewing"
+    - "offered"
+    - "accepted"
+    - "rejected"
+    - "passed"
+    - "hidden"
+
+  # Remind to follow up after X days
+  followup_reminder_days: 7
+
+# ===== NOTIFICATIONS (Future Feature) =====
+notifications:
+  enabled: false
+  email_on_high_score: false
+  score_threshold: 80
