@@ -1,0 +1,40 @@
+Conner Reavill
+Cloud Engineer | AWS Serverless & Infrastructure
+(931) 303-2921 | reavill.conner@gmail.com | San Diego, CA
+Conner-Reavill.com | linkedin.com/in/creavill | github.com/creavill
+
+Professional Summary
+AWS-certified Cloud Engineer operating a production serverless platform at ~$75/month through cost-optimized Lambda, SQS, and S3 architecture. Specializes in Infrastructure as Code, event-driven systems, and high-availability design.
+
+Technical Skills
+Cloud Infrastructure: AWS (Lambda, S3, CloudFront, API Gateway, SQS, Route 53, Secrets Manager, Amplify), Serverless Computing, Monitoring & Observability (CloudWatch), Cost Optimization
+Infrastructure & DevOps: Infrastructure as Code (AWS SAM, Terraform), CI/CD (GitHub Actions), Docker, Serverless Framework
+Distributed Systems: SQS (Event-Driven Architecture, DLQs), High-Availability Global Distribution, Resilience Engineering, Fault-Tolerance
+Programming: Python, JavaScript/TypeScript, Node.js, SQL, Bash
+Web & Databases: React.js, Next.js 14, MongoDB, PostgreSQL, MySQL, Redis
+
+Technical Projects
+Social Spork: AI-Powered Recipe Platform | social-spork.com
+- Architected decoupled AWS infrastructure (Lambda, SQS, S3, CloudWatch) designed for independent scaling and fault isolation.
+- Implemented resilience patterns via SQS and Dead-Letter Queues (DLQs), ensuring data integrity and graceful failure handling.
+- Achieved ~$75/month operating cost through serverless architecture and pay-per-use resource optimization.
+- Integrated OpenAI APIs (Whisper/GPT-4o) for automated data extraction and structured transformation pipelines.
+
+Wave-Finder: ML-Powered Surf Forecasting Platform | thewavefinder.com
+- Designed high-availability global distribution architecture using AWS S3, CloudFront, and Route 53 to serve content efficiently and reduce infrastructure costs by 60% via serverless optimization.
+- Configured Route 53 routing policies for high availability and low-latency global content delivery.
+- Utilized Infrastructure as Code (AWS SAM/Terraform) and automated CI/CD via GitHub Actions for performant, reproducible deployments.
+
+Professional Experience
+AI Data Specialist | DataAnnotation.tech | March 2024 – Present
+Trained large-scale language models by curating datasets and evaluating system outputs for accuracy and coherence. Leveraged remote flexibility to complete advanced AWS cloud architecture training and accelerate certification readiness.
+
+Front End Developer | BadabingMP | 2022 – 2023
+Built responsive React.js web application, managing full development lifecycle. Implemented CI/CD pipeline using GitHub Actions to automate testing and deployment, reducing manual errors and accelerating delivery.
+
+Systems Engineering Intern | Visa Inc. | Summer 2022
+Optimized mission-critical mainframe (z/OS) systems processing millions of daily transactions, ensuring system stability. Collaborated with senior engineers on high-availability design principles for mission-critical financial systems.
+
+Education & Certifications
+California Polytechnic State University | Bachelor of Science in Software Engineering | May 2024
+AWS Certified Solutions Architect – Associate | November 2025

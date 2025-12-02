@@ -1,122 +1,228 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
     body {
-      width: 320px;
-      padding: 16px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Segoe UI Emoji', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 14px;
+      background: #f9fafb;
+      display: flex;
+      flex-direction: column;
     }
-    h1 {
-      font-size: 18px;
-      margin: 0 0 16px 0;
-      color: #1a1a1a;
+    .header {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      color: white;
+      padding: 16px 20px;
+      flex-shrink: 0;
     }
-    .form-group {
-      margin-bottom: 12px;
+    .header h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .header p { font-size: 12px; opacity: 0.9; }
+    .tabs {
+      display: flex;
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
     }
+    .tab {
+      flex: 1;
+      padding: 12px;
+      text-align: center;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      font-weight: 500;
+      font-size: 13px;
+      transition: all 0.2s;
+      background: none;
+      border-top: none;
+      border-left: none;
+      border-right: none;
+    }
+    .tab:hover { background: #f9fafb; }
+    .tab.active { border-bottom-color: #2563eb; color: #2563eb; }
+    .content {
+      padding: 20px;
+      flex: 1;
+      overflow-y: auto;
+    }
+    .section { display: none; }
+    .section.active { display: block; }
+    .form-group { margin-bottom: 16px; }
     label {
       display: block;
       font-weight: 500;
-      margin-bottom: 4px;
-      color: #333;
+      margin-bottom: 6px;
+      color: #374151;
+      font-size: 13px;
     }
     input, textarea {
       width: 100%;
-      padding: 8px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1.5px solid #d1d5db;
+      border-radius: 6px;
       font-size: 13px;
+      font-family: inherit;
     }
-    textarea {
-      height: 100px;
-      resize: vertical;
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
     }
+    textarea { resize: vertical; line-height: 1.5; }
+    .textarea-small { min-height: 80px; }
+    .textarea-medium { min-height: 150px; }
+    .textarea-large { min-height: 250px; }
     button {
       width: 100%;
-      padding: 10px;
-      background: #2563eb;
-      color: white;
+      padding: 12px;
       border: none;
-      border-radius: 4px;
+      border-radius: 6px;
       font-size: 14px;
       font-weight: 500;
       cursor: pointer;
+      transition: all 0.2s;
       margin-top: 8px;
     }
-    button:hover {
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover:not(:disabled) {
       background: #1d4ed8;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
     }
-    button:disabled {
-      background: #93c5fd;
-      cursor: not-allowed;
+    .btn-success { background: #059669; color: white; }
+    .btn-success:hover:not(:disabled) { background: #047857; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .result-card {
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      margin-bottom: 16px;
     }
-    button.secondary {
-      background: #6b7280;
-      margin-top: 4px;
+    .result-card h3 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #374151;
     }
-    button.secondary:hover {
-      background: #4b5563;
+    .result-card pre {
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #4b5563;
+    }
+    .copy-btn {
+      padding: 6px 12px;
+      font-size: 12px;
+      margin-top: 8px;
+      width: auto;
+      display: inline-block;
+    }
+    .hint { font-size: 11px; color: #6b7280; margin-top: 4px; }
+    .score-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 12px;
     }
     .status {
-      margin-top: 12px;
-      padding: 8px;
-      border-radius: 4px;
+      padding: 12px;
+      border-radius: 6px;
       font-size: 13px;
-      display: none;
+      margin-top: 12px;
     }
-    .status.success {
-      display: block;
-      background: #d1fae5;
-      color: #065f46;
+    .status.success { background: #d1fae5; color: #065f46; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .question-list { list-style: none; padding: 0; }
+    .question-list li {
+      padding: 8px 12px;
+      background: #f9fafb;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
     }
-    .status.error {
-      display: block;
-      background: #fee2e2;
-      color: #991b1b;
-    }
-    .auto-detected {
-      font-size: 11px;
-      color: #6b7280;
-      margin-top: 2px;
-    }
+    .question-list li:hover { background: #f3f4f6; }
   </style>
 </head>
 <body>
-  <h1>📋 Capture Job</h1>
-  
-  <div class="form-group">
-    <label>Job Title *</label>
-    <input type="text" id="title" placeholder="Senior Software Engineer">
+  <div class="header">
+    <h1>🎯 HireTrack</h1>
+    <p>Side panel stays open while you browse</p>
   </div>
   
-  <div class="form-group">
-    <label>Company</label>
-    <input type="text" id="company" placeholder="Acme Corp">
+  <div class="tabs">
+    <button class="tab active" data-tab="analyze">📊 Analyze</button>
+    <button class="tab" data-tab="apply">✍️ Apply</button>
+    <button class="tab" data-tab="questions">💬 Questions</button>
   </div>
   
-  <div class="form-group">
-    <label>Location</label>
-    <input type="text" id="location" placeholder="Remote" value="Remote">
+  <div class="content">
+    <div id="analyze-section" class="section active">
+      <div class="form-group">
+        <label>Job Title *</label>
+        <input type="text" id="title" placeholder="Senior Backend Engineer">
+      </div>
+      
+      <div class="form-group">
+        <label>Company</label>
+        <input type="text" id="company" placeholder="Company name">
+      </div>
+      
+      <div class="form-group">
+        <label>Job Description *</label>
+        <textarea id="description" class="textarea-medium" placeholder="Paste full job description..."></textarea>
+        <div class="hint">💡 Paste entire posting for best results</div>
+      </div>
+      
+      <button class="btn-primary" id="analyzeBtn">🤖 Analyze Fit</button>
+      <div id="analyze-result"></div>
+    </div>
+    
+    <div id="apply-section" class="section">
+      <div class="result-card">
+        <h3>📄 Cover Letter</h3>
+        <textarea id="coverLetter" class="textarea-large" placeholder="Generate cover letter first..."></textarea>
+        <button class="btn-primary copy-btn" id="copyCoverBtn">📋 Copy</button>
+        <button class="btn-success" id="generateCoverBtn">✨ Generate</button>
+      </div>
+      
+      <div class="result-card">
+        <h3>📎 Recommended Resume</h3>
+        <div id="resumeRec">Analyze job first to get recommendation</div>
+      </div>
+      
+      <button class="btn-success" id="markAppliedBtn">✅ Mark as Applied</button>
+    </div>
+    
+    <div id="questions-section" class="section">
+      <div class="form-group">
+        <label>Select Question Template</label>
+        <ul class="question-list">
+          <li data-question="why-company">Why do you want to work here?</li>
+          <li data-question="why-you">Why should we hire you?</li>
+          <li data-question="weakness">What's your biggest weakness?</li>
+          <li data-question="strength">What's your greatest strength?</li>
+          <li data-question="experience">Tell me about relevant experience</li>
+          <li data-question="challenge">Describe a technical challenge</li>
+        </ul>
+      </div>
+      
+      <div class="form-group">
+        <label>Custom Question</label>
+        <textarea id="customQuestion" class="textarea-small" placeholder="Type your own question..."></textarea>
+        <button class="btn-primary" id="customQuestionBtn">Generate Answer</button>
+      </div>
+      
+      <div id="answer-result"></div>
+    </div>
   </div>
-  
-  <div class="form-group">
-    <label>URL</label>
-    <input type="text" id="url" readonly>
-    <div class="auto-detected">Auto-detected from current tab</div>
-  </div>
-  
-  <div class="form-group">
-    <label>Description</label>
-    <textarea id="description" placeholder="Paste or auto-extract job description..."></textarea>
-  </div>
-  
-  <button id="extractBtn" class="secondary">🔍 Extract from Page</button>
-  <button id="captureBtn">💾 Save to Job Tracker</button>
-  
-  <div id="status" class="status"></div>
   
   <script src="popup.js"></script>
 </body>

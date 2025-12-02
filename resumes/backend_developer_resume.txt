@@ -1,0 +1,39 @@
+Conner Reavill
+Backend Developer | Distributed Systems & API Design
+(931) 303-2921 | reavill.conner@gmail.com | San Diego, CA
+Conner-Reavill.com | linkedin.com/in/creavill | github.com/creavill
+
+Professional Summary
+Backend Developer building resilient distributed systems with Python, Node.js, and AWS serverless. Operates a production AI pipeline integrating OpenAI APIs with event-driven processing (Lambda/SQS) and optimized MongoDB queries. AWS Solutions Architect certified.
+
+Technical Skills
+Backend & Infrastructure: Python, Node.js, Java, Bash, AWS (Lambda, SQS, Secrets Manager), Docker, CI/CD, IaC (AWS SAM, Terraform), API Gateway
+Distributed Systems: SQS (Message Queues, DLQs), Low-Latency API Endpoints, Asynchronous Job Processing, Resilience Engineering, Caching Strategies (Redis)
+Databases & APIs: SQL, PostgreSQL, MongoDB, MySQL, Data Modeling, REST APIs, Database Optimization 
+Web Concepts: JavaScript/TypeScript, React.js, Next.js 14
+
+Technical Projects
+Social Spork: AI-Powered Recipe Platform | social-spork.com
+- Designed event-driven system using AWS Lambda (Python) and SQS, decoupling processing stages for independent scaling and maintainability.
+- Integrated OpenAI APIs (Whisper/GPT-4o) for automated content extraction and structured data transformation.
+- Implemented resilient job processing via SQS and Dead-Letter Queues (DLQs), ensuring guaranteed delivery and data integrity.
+- Engineered low-latency API serving recipe data through optimized MongoDB queries and indexing strategies.
+
+Wave-Finder: ML-Powered Surf Forecasting Platform | thewavefinder.com
+- Built RESTful API with API Gateway/Lambda handling authentication, data validation, and core business logic for the front-end application.
+- Implemented a secure and scalable serverless backend integrated with Aurora DB, showcasing experience operating and scaling online data serving infrastructure.
+- Utilized Infrastructure as Code (AWS SAM/Terraform) and automated CI/CD via GitHub Actions for performant, reproducible code deployments.
+
+Professional Experience
+AI Data Specialist | DataAnnotation.tech | March 2024 – Present
+Trained and refined large-scale language models by curating datasets and evaluating system outputs for accuracy and coherence.
+
+Front End Developer | BadabingMP | 2022 – 2023
+Managed full development lifecycle of a responsive web application, including backend integration and API consumption. Implemented CI/CD pipeline using GitHub Actions to automate testing and deployment, accelerating feature delivery.
+
+Systems Engineering Intern | Visa Inc. | Summer 2022
+Optimized mission-critical mainframe (z/OS) systems processing millions of daily transactions, ensuring system stability. Collaborated with senior engineers on high-availability design principles for mission-critical financial systems.
+
+Education & Certifications
+California Polytechnic State University | Bachelor of Science in Software Engineering | May 2024
+AWS Certified Solutions Architect – Associate | November 2025

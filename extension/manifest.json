@@ -1,11 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Job Tracker Capture",
+  "name": "HireTrack Application Helper",
   "version": "1.0",
-  "description": "Capture job listings from any page and send to Job Tracker",
-  "permissions": ["activeTab", "scripting"],
+  "description": "Analyze jobs, generate cover letters, and prepare interview answers",
+  "permissions": ["sidePanel", "activeTab"],
   "host_permissions": ["http://localhost:5000/*"],
   "action": {
-    "default_popup": "popup.html"
+    "default_title": "Open HireTrack Side Panel"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   }
 }

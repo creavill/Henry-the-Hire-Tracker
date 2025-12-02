@@ -1,0 +1,39 @@
+Conner Reavill
+Full-Stack Developer | Next.js & Serverless Architectures
+(931) 303-2921 | reavill.conner@gmail.com | San Diego, CA
+Conner-Reavill.com | linkedin.com/in/creavill | github.com/creavill
+
+Professional Summary
+Full-Stack Developer with a deployed AI-powered platform built on Next.js and AWS serverless. Combines responsive frontend development (React, Tailwind) with event-driven backend architecture (Lambda, SQS, MongoDB). AWS Solutions Architect certified.
+
+Technical Skills
+Web & Databases: React.js, Next.js 14, Tailwind CSS, React Hooks, Context API, Jest/Testing Library, REST APIs, MongoDB, PostgreSQL, MySQL, Redis
+Programming: JavaScript/TypeScript, Python, Node.js, Java, SQL, Bash
+Cloud & Infrastructure: AWS (Lambda, S3, CloudFront, API Gateway, Amplify), CI/CD (GitHub Actions), Docker
+Developer Tools: Git, Webpack, Babel, Jira, Figma
+
+Technical Projects
+Social Spork: AI-Powered Recipe Platform | social-spork.com
+- Built responsive UI with Next.js 14 (SSR/SSG) and React Hooks, optimizing initial load times and Core Web Vitals performance.
+- Integrated MongoDB with full-text search and aggregation pipelines for low-latency, complex query serving.
+- Designed a decoupled, event-driven serverless backend (AWS Lambda/SQS) enabling independent scaling and non-blocking user experience.
+- Implemented Schema.org structured data achieving Google rich result indexing for improved SEO visibility.
+
+Wave-Finder: ML-Powered Surf Forecasting Platform | thewavefinder.com
+- Designed a high-availability global distribution architecture using AWS S3, CloudFront, and Route 53 to ensure efficient content delivery to users worldwide.
+- Implemented a secure serverless backend (API Gateway/Lambda) integrated with Aurora DB.
+- Utilized Infrastructure as Code (AWS SAM/Terraform) and automated CI/CD via GitHub Actions for performant, reproducible deployments.
+
+Professional Experience
+AI Data Specialist | DataAnnotation.tech | March 2024 – Present
+Trained large-scale language models by curating datasets and evaluating system outputs for accuracy and coherence.
+
+Front End Developer | BadabingMP | 2022 – 2023
+Developed and maintained a responsive React.js web application, managing the full development lifecycle from wireframe to deployment. Established a robust CI/CD pipeline using GitHub Actions, reducing manual deployment errors by 40% and accelerating feature delivery. Managed production builds deployed to AWS S3 + CloudFront.
+
+Systems Engineering Intern | Visa Inc. | Summer 2022
+Optimized mission-critical mainframe (z/OS) systems processing millions of daily transactions. Collaborated with senior engineers on high-availability design principles for mission-critical financial systems.
+
+Education & Certifications
+California Polytechnic State University | Bachelor of Science in Software Engineering | May 2024
+AWS Certified Solutions Architect – Associate | November 2025
