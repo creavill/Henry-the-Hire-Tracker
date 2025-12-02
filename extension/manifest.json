@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "HireTrack Application Helper",
+  "name": "Henry - Job Application Assistant",
   "version": "1.0",
-  "description": "Analyze jobs, generate cover letters, and prepare interview answers",
+  "description": "Analyze jobs, generate cover letters, and prepare interview answers with AI",
   "permissions": ["sidePanel", "activeTab"],
   "host_permissions": ["http://localhost:5000/*"],
   "action": {
-    "default_title": "Open HireTrack Side Panel"
+    "default_title": "Open Henry Side Panel"
   },
   "side_panel": {
     "default_path": "popup.html"

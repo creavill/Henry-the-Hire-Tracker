@@ -104,6 +104,8 @@ def clean_job_url(url: str) -> str:
 # ============== Database ==============
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+    
+    # Create tables if they don't exist
     conn.execute('''
         CREATE TABLE IF NOT EXISTS jobs (
             job_id TEXT PRIMARY KEY,
@@ -122,9 +124,46 @@ def init_db():
             created_at TEXT,
             updated_at TEXT,
             email_date TEXT,
-            is_filtered INTEGER DEFAULT 0
+            is_filtered INTEGER DEFAULT 0,
+            viewed INTEGER DEFAULT 0
         )
     ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS scan_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            last_scan_date TEXT,
+            emails_found INTEGER,
+            created_at TEXT
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            url TEXT,
+            notes TEXT,
+            created_at TEXT
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS followups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT,
+            subject TEXT,
+            type TEXT,
+            snippet TEXT,
+            email_date TEXT,
+            created_at TEXT
+        )
+    ''')
+    
+    # Migration: Add viewed column if it doesn't exist
+    try:
+        conn.execute("SELECT viewed FROM jobs LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Migrating database: adding 'viewed' column...")
+        conn.execute("ALTER TABLE jobs ADD COLUMN viewed INTEGER DEFAULT 0")
+    
     conn.commit()
     conn.close()
 
@@ -177,68 +216,287 @@ def generate_job_id(url, title, company):
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 def parse_linkedin_jobs(html, email_date):
+    """Extract LinkedIn jobs with better filtering."""
     jobs = []
     soup = BeautifulSoup(html, 'html.parser')
-    job_links = soup.find_all('a', href=re.compile(r'linkedin\.com.*jobs'))
+    
+    # Find job links with actual job IDs
+    job_links = soup.find_all('a', href=re.compile(r'linkedin\.com.*jobs/view/\d{10}'))
+    
+    exclude_keywords = ['see all', 'unsubscribe', 'help', 'saved jobs', 'search jobs', 
+                       'learn why', 'settings', 'preferences', 'view all', 'messaging', 
+                       'mynetwork', 'games', 'notifications']
     
     seen = set()
     for link in job_links:
         url = clean_job_url(link.get('href', ''))
         if not url or url in seen:
             continue
-        seen.add(url)
         
-        title_elem = link.find(['h2', 'h3', 'strong', 'span'])
-        title = title_elem.get_text(strip=True) if title_elem else link.get_text(strip=True)
-        if not title or len(title) < 3:
+        # Get title from link text or nearby heading
+        title_elem = link.find(['h3', 'h4', 'span', 'div'])
+        full_text = title_elem.get_text(strip=True) if title_elem else link.get_text(strip=True)
+        
+        # Skip if title is a UI element
+        if any(keyword in full_text.lower() for keyword in exclude_keywords):
             continue
         
-        parent = link.find_parent(['td', 'div', 'tr'])
-        company, location, raw_text = "", "", title
+        if not full_text or len(full_text) < 5:
+            continue
+        
+        seen.add(url)
+        
+        # Parse formats:
+        # "Software EngineerLensa · San Diego, CA"
+        # "DevOps EngineerHumana · United States (Remote)"
+        title = full_text
+        company = ""
+        location = ""
+        
+        # Split on delimiter
+        if '·' in full_text:
+            parts = full_text.split('·', 1)
+            title_company_part = parts[0].strip()
+            location = parts[1].strip() if len(parts) > 1 else ""
+            
+            # Company is capitalized word(s) after lowercase letter
+            # Match patterns like "EngineerCompanyName" or "DeveloperLensa"
+            match = re.search(r'([a-z])([A-Z][A-Za-z0-9\s&.,-]+)$', title_company_part)
+            if match:
+                title = title_company_part[:match.start(2)].strip()
+                company = match.group(2).strip()
+            else:
+                # Fallback: split on last capital letter sequence
+                capital_match = re.search(r'^(.+?)([A-Z][A-Za-z0-9\s&.,-]+)$', title_company_part)
+                if capital_match:
+                    title = capital_match.group(1).strip()
+                    company = capital_match.group(2).strip()
+                else:
+                    title = title_company_part
+        
+        # Fallback: check parent for more context
+        if not company:
+            parent = link.find_parent(['div', 'td', 'tr', 'li'])
+            if parent:
+                text = parent.get_text('\n', strip=True)
+                lines = [l.strip() for l in text.split('\n') if l.strip()]
+                # Look for company name in next line
+                for i, line in enumerate(lines):
+                    if title in line and i + 1 < len(lines):
+                        next_line = lines[i + 1]
+                        # Company usually doesn't have symbols except &
+                        if not any(c in next_line for c in ['$', '/', '(', ')', 'Easy Apply', 'Actively']):
+                            company = next_line.split('·')[0].strip()[:100]
+                        break
+        
+        raw_text = full_text
+        parent = link.find_parent(['div', 'td', 'tr', 'li'])
         if parent:
-            raw_text = parent.get_text(' ', strip=True)
-            parts = raw_text.split('·')
-            company = parts[1].strip()[:100] if len(parts) > 1 else ""
-            location = parts[2].strip()[:100] if len(parts) > 2 else ""
+            text = parent.get_text('\n', strip=True)
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            raw_text = ' '.join(lines[:5])[:1000]
         
         jobs.append({
             'job_id': generate_job_id(url, title, company),
-            'title': title[:200], 'company': company, 'location': location,
-            'url': url, 'source': 'linkedin', 'raw_text': raw_text[:1000],
-            'created_at': email_date, 'email_date': email_date
+            'title': title[:200],
+            'company': company[:100] if company else "Unknown",
+            'location': location[:100],
+            'url': url,
+            'source': 'linkedin',
+            'raw_text': raw_text,
+            'created_at': email_date,
+            'email_date': email_date
         })
+    
     return jobs
 
+
 def parse_indeed_jobs(html, email_date):
+    """Extract Indeed jobs with better filtering."""
     jobs = []
     soup = BeautifulSoup(html, 'html.parser')
-    job_links = soup.find_all('a', href=re.compile(r'indeed\.com.*(jk=|vjk=)'))
+    
+    # Indeed uses table cells or divs for job cards
+    job_links = soup.find_all('a', href=re.compile(r'indeed\.com.*(jk=|vjk=)[a-f0-9]+'))
+    
+    exclude_keywords = ['unsubscribe', 'help', 'view all', 'see all', 'homepage', 
+                       'messages', 'notifications', 'easily apply', 'responsive employer']
     
     seen = set()
     for link in job_links:
         url = clean_job_url(link.get('href', ''))
         if not url or url in seen:
             continue
-        seen.add(url)
         
-        title = link.get_text(strip=True)
-        if not title or len(title) < 3:
+        full_text = link.get_text(strip=True)
+        
+        # Skip UI elements
+        if any(keyword in full_text.lower() for keyword in exclude_keywords):
             continue
         
-        parent = link.find_parent(['td', 'div', 'tr'])
-        company, location, raw_text = "", "", title
+        if not full_text or len(full_text) < 5:
+            continue
+        
+        seen.add(url)
+        
+        title = full_text
+        company = ""
+        location = ""
+        
+        # Find parent container
+        parent = link.find_parent(['td', 'div', 'li'])
+        raw_text = full_text
+        
         if parent:
-            raw_text = parent.get_text(' ', strip=True)
-            lines = [l.strip() for l in parent.get_text('\n').split('\n') if l.strip()]
-            company = lines[1][:100] if len(lines) > 1 else ""
-            location = lines[2][:100] if len(lines) > 2 else ""
+            text = parent.get_text('\n', strip=True)
+            lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 2]
+            
+            # Indeed format: Title / Company / Location / Salary / Description
+            for i, line in enumerate(lines):
+                if title in line and i + 1 < len(lines):
+                    # Next line is usually company
+                    potential_company = lines[i + 1]
+                    # Skip ratings like "4.8 4.8/5 rating"
+                    if not re.match(r'^\d+\.?\d*\s*\d', potential_company):
+                        company = potential_company[:100]
+                    if i + 2 < len(lines):
+                        potential_location = lines[i + 2]
+                        if 'remote' in potential_location.lower() or ',' in potential_location:
+                            location = potential_location[:100]
+                    break
+            
+            raw_text = ' '.join(lines[:6])[:1000]
         
         jobs.append({
             'job_id': generate_job_id(url, title, company),
-            'title': title[:200], 'company': company, 'location': location,
-            'url': url, 'source': 'indeed', 'raw_text': raw_text[:1000],
-            'created_at': email_date, 'email_date': email_date
+            'title': title[:200],
+            'company': company if company else "Unknown",
+            'location': location,
+            'url': url,
+            'source': 'indeed',
+            'raw_text': raw_text,
+            'created_at': email_date,
+            'email_date': email_date
         })
+    
+    return jobs
+
+
+def parse_greenhouse_jobs(html, email_date):
+    """Extract Greenhouse jobs."""
+    jobs = []
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Greenhouse links
+    job_links = soup.find_all('a', href=re.compile(r'greenhouse\.io|boards\.greenhouse\.io'))
+    
+    seen = set()
+    for link in job_links:
+        url = link.get('href', '')
+        if not url or url in seen or 'unsubscribe' in url.lower():
+            continue
+        
+        url = clean_job_url(url)
+        
+        # Title from link or nearby
+        title = link.get_text(strip=True)
+        if not title or len(title) < 5:
+            continue
+        
+        seen.add(url)
+        
+        # Find company and location
+        parent = link.find_parent(['div', 'td', 'tr'])
+        company, location, raw_text = "", "", title
+        
+        if parent:
+            text = parent.get_text('\n', strip=True)
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            
+            # Extract company from URL or nearby text
+            if 'boards.greenhouse.io' in url:
+                company = url.split('boards.greenhouse.io/')[-1].split('/')[0].replace('-', ' ').title()
+            
+            for line in lines:
+                if 'engineering' in line.lower() or 'department' in line.lower():
+                    continue
+                if any(loc in line.lower() for loc in ['remote', 'hybrid', 'san diego', 'california']):
+                    location = line[:100]
+                    break
+            
+            raw_text = ' '.join(lines[:5])[:1000]
+        
+        jobs.append({
+            'job_id': generate_job_id(url, title, company),
+            'title': title[:200],
+            'company': company,
+            'location': location,
+            'url': url,
+            'source': 'greenhouse',
+            'raw_text': raw_text,
+            'created_at': email_date,
+            'email_date': email_date
+        })
+    
+    return jobs
+
+
+def parse_wellfound_jobs(html, email_date):
+    """Extract Wellfound (AngelList) jobs."""
+    jobs = []
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Wellfound links
+    job_links = soup.find_all('a', href=re.compile(r'wellfound\.com|angel\.co'))
+    
+    exclude_keywords = ['unsubscribe', 'settings', 'preferences', 'learn more']
+    
+    seen = set()
+    for link in job_links:
+        url = link.get('href', '')
+        if not url or url in seen:
+            continue
+        
+        url = clean_job_url(url)
+        title = link.get_text(strip=True)
+        
+        if any(keyword in title.lower() for keyword in exclude_keywords):
+            continue
+        
+        if not title or len(title) < 5:
+            continue
+        
+        seen.add(url)
+        
+        # Find company and details
+        parent = link.find_parent(['div', 'td', 'tr'])
+        company, location, raw_text = "", "Remote", title
+        
+        if parent:
+            text = parent.get_text('\n', strip=True)
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            
+            # Wellfound format includes company info nearby
+            for i, line in enumerate(lines):
+                if '/' in line and 'Employees' in line:
+                    company = line.split('/')[0].strip()[:100]
+                if any(loc in line for loc in ['Remote', 'Austin', 'San Diego', 'San Francisco']):
+                    location = line[:100]
+            
+            raw_text = ' '.join(lines[:8])[:1000]
+        
+        jobs.append({
+            'job_id': generate_job_id(url, title, company),
+            'title': title[:200],
+            'company': company,
+            'location': location,
+            'url': url,
+            'source': 'wellfound',
+            'raw_text': raw_text,
+            'created_at': email_date,
+            'email_date': email_date
+        })
+    
     return jobs
 
 def fetch_wwr_jobs(days_back=7):
@@ -260,7 +518,7 @@ def fetch_wwr_jobs(days_back=7):
                 desc_elem = item.find('description')
                 pub_date_elem = item.find('pubDate')
                 
-                if not title_elem or not link_elem:
+                if title_elem is None or link_elem is None:
                     continue
                 
                 title = title_elem.text or ''
@@ -311,32 +569,128 @@ def fetch_wwr_jobs(days_back=7):
 
 def scan_emails(days_back=7):
     service = get_gmail_service()
-    after_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y/%m/%d')
     
-    # Updated queries with alert@indeed.com
+    # Get last scan date from DB
+    conn = sqlite3.connect(DB_PATH)
+    last_scan = conn.execute(
+        "SELECT last_scan_date FROM scan_history ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    
+    if last_scan and last_scan[0]:
+        # Parse the saved date and format for Gmail
+        try:
+            last_date = datetime.fromisoformat(last_scan[0])
+            # Add 1 second to avoid re-processing last scan's emails
+            last_date = last_date + timedelta(seconds=1)
+            after_date = last_date.strftime('%Y/%m/%d')
+            print(f"📅 Scanning emails after last scan: {after_date}")
+        except:
+            # Fallback if date parsing fails
+            after_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y/%m/%d')
+            print(f"⚠️ Date parse failed, scanning last {days_back} days: {after_date}")
+    else:
+        after_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y/%m/%d')
+        print(f"🆕 First scan - looking back {days_back} days: {after_date}")
+    
+    # Query all job board emails + follow-ups
     queries = [
+        # Known job alerts
         f'from:jobs-noreply@linkedin.com after:{after_date}',
         f'from:jobalerts-noreply@linkedin.com after:{after_date}',
         f'from:noreply@indeed.com after:{after_date}',
         f'from:alert@indeed.com after:{after_date}',
+        f'from:no-reply@us.greenhouse-jobs.com after:{after_date}',
+        f'from:team@hi.wellfound.com after:{after_date}',
+        
+        # Generic job board catch-all (job OR career OR position in subject)
+        f'(subject:job OR subject:career OR subject:position OR subject:"now hiring") -from:linkedin.com -from:indeed.com -from:greenhouse.io -from:wellfound.com after:{after_date}',
+        
+        # Follow-ups for Applied tab
+        f'(subject:interview OR subject:"next steps" OR subject:update OR subject:"application received" OR subject:confirmation) after:{after_date}',
+        f'(subject:unfortunately OR subject:offer OR subject:congratulations OR subject:"thank you for applying") after:{after_date}',
     ]
     
     all_jobs = []
+    seen_job_ids = set()  # Track job_ids to prevent duplicates
+    total_emails = 0
+    
     for query in queries:
         try:
-            results = service.users().messages().list(userId='me', q=query, maxResults=50).execute()
-            for msg_info in results.get('messages', []):
-                message = service.users().messages().get(userId='me', id=msg_info['id'], format='full').execute()
-                email_date = datetime.fromtimestamp(int(message.get('internalDate', 0)) / 1000).isoformat()
-                html = get_email_body(message.get('payload', {}))
-                
-                if 'linkedin' in query:
-                    all_jobs.extend(parse_linkedin_jobs(html, email_date))
-                else:
-                    all_jobs.extend(parse_indeed_jobs(html, email_date))
+            # Increased from 50 to 100
+            results = service.users().messages().list(userId='me', q=query, maxResults=100).execute()
+            messages = results.get('messages', [])
+            total_emails += len(messages)
+            
+            for msg_info in messages:
+                try:
+                    message = service.users().messages().get(userId='me', id=msg_info['id'], format='full').execute()
+                    email_date = datetime.fromtimestamp(int(message.get('internalDate', 0)) / 1000).isoformat()
+                    html = get_email_body(message.get('payload', {}))
+                    
+                    if not html:
+                        continue
+                    
+                    # Check if follow-up email
+                    subject = ''
+                    for header in message.get('payload', {}).get('headers', []):
+                        if header['name'].lower() == 'subject':
+                            subject = header['value'].lower()
+                            break
+                    
+                    is_followup = any(keyword in subject for keyword in [
+                        'interview', 'next steps', 'unfortunately', 'offer', 
+                        'congratulations', 'declined', 'application update'
+                    ])
+                    
+                    if is_followup:
+                        print(f"📧 Follow-up detected: {subject[:60]}...")
+                        # TODO: Add follow-up tracking table and logic
+                        continue
+                    
+                    # Route to appropriate parser
+                    if 'linkedin' in query:
+                        jobs = parse_linkedin_jobs(html, email_date)
+                    elif 'indeed' in query:
+                        jobs = parse_indeed_jobs(html, email_date)
+                    elif 'greenhouse' in query:
+                        jobs = parse_greenhouse_jobs(html, email_date)
+                    elif 'wellfound' in query:
+                        jobs = parse_wellfound_jobs(html, email_date)
+                    else:
+                        jobs = []
+                    
+                    # Deduplicate before adding
+                    unique_jobs = []
+                    for job in jobs:
+                        if job['job_id'] not in seen_job_ids:
+                            seen_job_ids.add(job['job_id'])
+                            unique_jobs.append(job)
+                    
+                    all_jobs.extend(unique_jobs)
+                    if unique_jobs:
+                        print(f"✓ Found {len(unique_jobs)} unique jobs from {query.split('from:')[1].split()[0] if 'from:' in query else 'follow-ups'}")
+                    
+                except Exception as e:
+                    print(f"Error parsing email {msg_info['id']}: {e}")
+                    continue
+                    
         except Exception as e:
-            print(f"Query error: {e}")
+            print(f"Query failed - {query}: {e}")
+            continue
     
+    # Save current scan timestamp (ISO format for consistency)
+    current_scan_time = datetime.now().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO scan_history (last_scan_date, emails_found, created_at) VALUES (?, ?, ?)",
+        (current_scan_time, total_emails, current_scan_time)
+    )
+    conn.commit()
+    conn.close()
+    
+    print(f"✅ Scan complete: {total_emails} emails checked, {len(all_jobs)} unique jobs extracted")
+    print(f"📌 Next scan will query emails after: {current_scan_time}")
     return all_jobs
 
 # ============== AI Filtering & Scoring ==============
@@ -371,27 +725,28 @@ INSTRUCTIONS:
 1. LOCATION FILTER: Keep ONLY if location is:
    - Remote (anywhere)
    - California Remote / CA Remote
-   - San Diego (any arrangement: onsite, hybrid, remote)
-   - Hybrid with San Diego option
+   - San Diego or San Diego County areas (including: Poway, Carlsbad, Encinitas, La Jolla, Del Mar, Chula Vista, El Cajon, Oceanside, Escondido, Vista, Santee, National City, Imperial Beach, Coronado, Solana Beach, etc.)
+   - Hybrid with San Diego area option
    
-2. SKILL LEVEL FILTER: Keep ONLY if skill level matches resume:
-   - Not too junior (e.g., "intern", "entry-level" when candidate is mid-level)
-   - Not too senior (e.g., "20+ years", "VP", "Director" when candidate is early career)
-   - Tech stack has reasonable overlap with resume
-
-3. BASELINE SCORE (1-100) based on:
-   - Title match to candidate's background
-   - Company reputation/fit
-   - Location convenience (Remote=100, San Diego=95, CA Remote=90, Hybrid SD=85)
-   - Seniority alignment
+2. SKILL LEVEL: Keep ALL levels but score appropriately:
+   - Entry-level/Junior with 0-2 years experience: Give lower score (30-50) but KEEP
+   - Mid-level matching resume: High score (60-85)
+   - Senior roles slightly above resume: Keep with moderate score (50-70)
+   - ONLY filter if extremely mismatched: VP/Director roles, or requires 15+ years when candidate has 2
+   
+3. BASELINE SCORE (1-100):
+   - Location: Remote=100, San Diego proper=95, SD County=90, CA Remote=85, Hybrid SD=85
+   - Seniority: Perfect match=+20, Entry-level=-15, Slightly senior=+0, Too senior=-30
+   - Company: Top tier (FAANG/unicorn)=+10, Startup=+5, Unknown=+0
+   - Tech stack overlap: High=+15, Medium=+5, Low=-10
 
 Return JSON only:
 {{
     "keep": <bool>,
     "baseline_score": <1-100>,
-    "filter_reason": "kept: good location and skill match" OR "filtered: requires 15+ years",
-    "location_match": "remote|san_diego|ca_remote|hybrid_sd|other",
-    "skill_level_match": "too_junior|good_fit|too_senior"
+    "filter_reason": "kept: entry-level but acceptable" OR "filtered: VP role requires 15+ years",
+    "location_match": "remote|san_diego|san_diego_county|ca_remote|hybrid_sd|other",
+    "skill_level_match": "entry_level|good_fit|slightly_senior|too_senior"
 }}
 """
     
@@ -419,25 +774,44 @@ def analyze_job(job, resume_text):
     """Full job analysis (called after baseline)."""
     client = anthropic.Anthropic()
     
-    prompt = f"""Analyze job fit. Respond ONLY with valid JSON.
+    prompt = f"""Analyze job fit with strict accuracy. Respond ONLY with valid JSON.
 
-RESUME:
+CANDIDATE'S RESUME:
 {resume_text}
 
-JOB:
+JOB LISTING:
 Title: {job['title']}
 Company: {job['company']}
 Location: {job['location']}
 Details: {job['raw_text']}
 
+CRITICAL INSTRUCTIONS:
+1. ONLY mention job titles/roles the candidate has ACTUALLY held (check resume carefully)
+2. ONLY cite technologies/skills explicitly listed in resume
+3. should_apply = true ONLY if qualification_score >= 65 AND no major dealbreakers
+4. Dealbreakers: wrong tech stack, requires 5+ years when candidate has 2, senior leadership role
+
+SCORING RUBRIC:
+- 80-100: Strong match, most requirements met, similar past roles
+- 60-79: Good match, can do the job with minor gaps
+- 40-59: Partial match, significant skill gaps but learnable
+- 1-39: Weak match, wrong seniority/stack/domain
+
 Return JSON:
-{{"qualification_score": <1-100>, "should_apply": <bool>, "strengths": ["..."], "gaps": ["..."], "recommendation": "...", "resume_to_use": "backend|cloud|fullstack"}}
+{{
+    "qualification_score": <1-100>,
+    "should_apply": <bool>,
+    "strengths": ["actual skills from resume that match", "relevant past experience"],
+    "gaps": ["missing requirements", "areas to improve"],
+    "recommendation": "2-3 sentence honest assessment",
+    "resume_to_use": "backend|cloud|fullstack"
+}}
 """
     
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=800,
+            max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
         match = re.search(r'\{[\s\S]*\}', response.content[0].text)
@@ -491,15 +865,15 @@ DASHBOARD_HTML = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>HireTrack - Job Tracker</title>
+    <title>Henry the Hire Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
     <div class="max-w-6xl mx-auto p-6">
         <div class="flex justify-between items-center mb-6">
             <div>
-                <h1 class="text-3xl font-bold">🎯 HireTrack</h1>
-                <p class="text-gray-600">AI-Filtered Job Tracker</p>
+                <h1 class="text-3xl font-bold">🎩 Henry the Hire Tracker</h1>
+                <p class="text-gray-600">Your AI-Powered Job Search Assistant</p>
             </div>
             <div class="space-x-2">
                 <button onclick="scanEmails()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
@@ -514,31 +888,77 @@ DASHBOARD_HTML = '''
             </div>
         </div>
         
-        <div id="stats" class="grid grid-cols-5 gap-4 mb-6"></div>
-        
-        <div class="mb-4 flex gap-4">
-            <input type="text" id="search" placeholder="Search..." 
-                   class="flex-1 px-4 py-2 border rounded" onkeyup="filterJobs()">
-            <select id="statusFilter" class="px-4 py-2 border rounded" onchange="loadJobs()">
-                <option value="">All Statuses</option>
-                <option value="new">New</option>
-                <option value="interested">Interested</option>
-                <option value="applied">Applied</option>
-                <option value="passed">Passed</option>
-            </select>
-            <select id="minScore" class="px-4 py-2 border rounded" onchange="loadJobs()">
-                <option value="0">All Scores</option>
-                <option value="80">80+</option>
-                <option value="60">60+</option>
-                <option value="40">40+</option>
-            </select>
+        <div class="mb-6 border-b">
+            <button onclick="showTab('jobs')" id="tab-jobs" class="px-4 py-2 font-semibold border-b-2 border-blue-600">
+                Jobs
+            </button>
+            <button onclick="showTab('watchlist')" id="tab-watchlist" class="px-4 py-2 font-semibold text-gray-600">
+                Watchlist
+            </button>
         </div>
         
-        <div id="jobs" class="space-y-3"></div>
+        <div id="jobs-tab">
+            <div id="stats" class="grid grid-cols-5 gap-4 mb-6"></div>
+            
+            <div class="mb-4 flex gap-4">
+                <input type="text" id="search" placeholder="Search..." 
+                       class="flex-1 px-4 py-2 border rounded" onkeyup="filterJobs()">
+                <select id="statusFilter" class="px-4 py-2 border rounded" onchange="loadJobs()">
+                    <option value="">All Statuses</option>
+                    <option value="new">New</option>
+                    <option value="interested">Interested</option>
+                    <option value="applied">Applied</option>
+                    <option value="passed">Passed</option>
+                </select>
+                <select id="minScore" class="px-4 py-2 border rounded" onchange="loadJobs()">
+                    <option value="0">All Scores</option>
+                    <option value="80">80+</option>
+                    <option value="60">60+</option>
+                    <option value="40">40+</option>
+                </select>
+            </div>
+            
+            <div id="jobs" class="space-y-3"></div>
+        </div>
+        
+        <div id="watchlist-tab" class="hidden">
+            <div class="bg-white rounded-lg shadow p-6 mb-4">
+                <h2 class="text-xl font-bold mb-4">Add Company to Watchlist</h2>
+                <div class="space-y-3">
+                    <input type="text" id="watch-company" placeholder="Company name" 
+                           class="w-full px-4 py-2 border rounded">
+                    <input type="url" id="watch-url" placeholder="Careers page URL" 
+                           class="w-full px-4 py-2 border rounded">
+                    <textarea id="watch-notes" placeholder="Notes (e.g., 'Not hiring now, check Q2')" 
+                              class="w-full px-4 py-2 border rounded" rows="3"></textarea>
+                    <button onclick="addToWatchlist()" class="bg-blue-600 text-white px-4 py-2 rounded">
+                        Add to Watchlist
+                    </button>
+                </div>
+            </div>
+            
+            <div id="watchlist-items" class="space-y-3"></div>
+        </div>
     </div>
     
     <script>
         let allJobs = [];
+        let currentTab = 'jobs';
+        
+        function showTab(tab) {
+            currentTab = tab;
+            document.getElementById('jobs-tab').classList.toggle('hidden', tab !== 'jobs');
+            document.getElementById('watchlist-tab').classList.toggle('hidden', tab !== 'watchlist');
+            
+            document.getElementById('tab-jobs').className = tab === 'jobs' 
+                ? 'px-4 py-2 font-semibold border-b-2 border-blue-600'
+                : 'px-4 py-2 font-semibold text-gray-600';
+            document.getElementById('tab-watchlist').className = tab === 'watchlist'
+                ? 'px-4 py-2 font-semibold border-b-2 border-blue-600'
+                : 'px-4 py-2 font-semibold text-gray-600';
+            
+            if (tab === 'watchlist') loadWatchlist();
+        }
         
         function formatDate(dateStr) {
             if (!dateStr) return '';
@@ -603,8 +1023,22 @@ DASHBOARD_HTML = '''
                 const scoreColor = job.baseline_score >= 80 ? 'bg-green-500' : 
                                    job.baseline_score >= 60 ? 'bg-blue-500' : 
                                    job.baseline_score >= 40 ? 'bg-yellow-500' : 'bg-gray-300';
+                
+                // Status colors
+                const statusColors = {
+                    'new': 'bg-gray-100 border-gray-300',
+                    'interested': 'bg-blue-50 border-blue-300',
+                    'applied': 'bg-green-50 border-green-400',
+                    'interviewing': 'bg-purple-50 border-purple-300',
+                    'passed': 'bg-gray-50 border-gray-200',
+                    'rejected': 'bg-red-50 border-red-200'
+                };
+                
+                const statusColor = statusColors[job.status] || statusColors['new'];
+                const viewedStyle = job.viewed ? 'opacity-90 bg-gray-100' : '';
+                
                 return `
-                <div class="bg-white rounded-lg shadow p-4">
+                <div class="bg-white ${viewedStyle} rounded-lg shadow p-4 border-l-4 ${statusColor}">
                     <div class="flex justify-between items-start">
                         <div class="flex-1">
                             <div class="flex items-center gap-2 mb-1">
@@ -615,7 +1049,13 @@ DASHBOARD_HTML = '''
                             </div>
                             <p class="text-gray-600 text-sm">${job.company || 'Unknown'} • ${job.location || ''}</p>
                             <p class="text-gray-400 text-xs">${job.source} • ${formatDate(job.email_date)}</p>
-                            ${analysis.recommendation ? `<p class="text-gray-500 text-sm mt-2">${analysis.recommendation}</p>` : ''}
+                            
+                            ${analysis.recommendation ? `
+                            <div class="mt-2 p-2 bg-blue-50 border-l-2 border-blue-400 rounded text-sm">
+                                <strong class="text-blue-900">AI Insight:</strong>
+                                <p class="text-gray-700 mt-1">${analysis.recommendation}</p>
+                            </div>
+                            ` : ''}
                         </div>
                         <div class="flex items-center gap-2">
                             <select onchange="updateStatus('${job.job_id}', this.value)" 
@@ -624,12 +1064,23 @@ DASHBOARD_HTML = '''
                                     `<option value="${s}" ${job.status === s ? 'selected' : ''}>${s}</option>`
                                 ).join('')}
                             </select>
-                            <a href="${job.url}" target="_blank" class="text-blue-600 hover:underline text-sm">View</a>
+                            <button onclick="addToWatchlistFromJob('${job.company}', '${job.url}')" 
+                                    class="text-yellow-600 hover:text-yellow-700 p-1" title="Add to Watchlist">
+                                ⭐
+                            </button>
+                            <button onclick="hideJob('${job.job_id}')" 
+                                    class="text-gray-400 hover:text-red-600 p-1" title="Hide">
+                                ✕
+                            </button>
+                            <a href="${job.url}" target="_blank" class="text-blue-600 hover:underline text-sm"
+                               onclick="markViewed('${job.job_id}')">View</a>
                         </div>
                     </div>
+                    
                     ${analysis.strengths ? `
                     <details class="mt-3">
-                        <summary class="cursor-pointer text-sm text-gray-500">Details</summary>
+                        <summary class="cursor-pointer text-sm text-gray-500">Full Analysis</summary>
+                        
                         <div class="mt-2 grid grid-cols-2 gap-4 text-sm">
                             <div>
                                 <h4 class="font-semibold text-green-700">Strengths</h4>
@@ -640,6 +1091,7 @@ DASHBOARD_HTML = '''
                                 <ul class="list-disc list-inside">${(analysis.gaps || []).map(g => `<li>${g}</li>`).join('')}</ul>
                             </div>
                         </div>
+                        
                         ${job.cover_letter ? `
                         <div class="mt-3">
                             <h4 class="font-semibold">Cover Letter</h4>
@@ -656,6 +1108,71 @@ DASHBOARD_HTML = '''
                 </div>
                 `;
             }).join('');
+        }
+        
+        async function loadWatchlist() {
+            const res = await fetch('/api/watchlist');
+            const data = await res.json();
+            
+            const container = document.getElementById('watchlist-items');
+            if (data.items.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-center py-8">No companies on watchlist yet</p>';
+                return;
+            }
+            
+            container.innerHTML = data.items.map(item => `
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-lg">${item.company}</h3>
+                            <a href="${item.url}" target="_blank" class="text-blue-600 hover:underline text-sm">
+                                ${item.url}
+                            </a>
+                            ${item.notes ? `<p class="text-gray-600 text-sm mt-2">${item.notes}</p>` : ''}
+                            <p class="text-gray-400 text-xs mt-1">Added ${formatDate(item.created_at)}</p>
+                        </div>
+                        <button onclick="removeFromWatchlist(${item.id})" 
+                                class="text-red-600 hover:text-red-700">
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        async function addToWatchlist() {
+            const company = document.getElementById('watch-company').value.trim();
+            const url = document.getElementById('watch-url').value.trim();
+            const notes = document.getElementById('watch-notes').value.trim();
+            
+            if (!company) {
+                alert('Company name required');
+                return;
+            }
+            
+            await fetch('/api/watchlist', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({company, url, notes})
+            });
+            
+            document.getElementById('watch-company').value = '';
+            document.getElementById('watch-url').value = '';
+            document.getElementById('watch-notes').value = '';
+            
+            loadWatchlist();
+        }
+        
+        function addToWatchlistFromJob(company, url) {
+            document.getElementById('watch-company').value = company;
+            document.getElementById('watch-url').value = url;
+            showTab('watchlist');
+        }
+        
+        async function removeFromWatchlist(id) {
+            if (!confirm('Remove from watchlist?')) return;
+            await fetch(`/api/watchlist/${id}`, {method: 'DELETE'});
+            loadWatchlist();
         }
         
         async function scanWWR() {
@@ -697,6 +1214,25 @@ DASHBOARD_HTML = '''
             loadJobs();
         }
         
+        async function markViewed(jobId) {
+            await fetch(`/api/jobs/${jobId}`, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({viewed: 1})
+            });
+            setTimeout(() => loadJobs(), 500);
+        }
+        
+        async function hideJob(jobId) {
+            if (!confirm('Hide this job?')) return;
+            await fetch(`/api/jobs/${jobId}`, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({status: 'hidden'})
+            });
+            loadJobs();
+        }
+        
         async function generateCoverLetter(jobId) {
             event.target.disabled = true;
             event.target.textContent = 'Generating...';
@@ -718,10 +1254,14 @@ def dashboard():
 def get_jobs():
     status = request.args.get('status', '')
     min_score = int(request.args.get('min_score', 0))
+    show_hidden = request.args.get('show_hidden', 'false') == 'true'
     
     conn = get_db()
     query = "SELECT * FROM jobs WHERE is_filtered = 0"
     params = []
+    
+    if not show_hidden:
+        query += " AND status != 'hidden'"
     
     if status:
         query += " AND status = ?"
@@ -743,7 +1283,7 @@ def get_jobs():
     jobs.sort(key=lambda x: x['weighted_score'], reverse=True)
     
     # Stats
-    all_jobs = [dict(row) for row in conn.execute("SELECT status, baseline_score FROM jobs WHERE is_filtered = 0").fetchall()]
+    all_jobs = [dict(row) for row in conn.execute("SELECT status, baseline_score FROM jobs WHERE is_filtered = 0 AND status != 'hidden'").fetchall()]
     stats = {
         'total': len(all_jobs),
         'new': len([j for j in all_jobs if j['status'] == 'new']),
@@ -759,11 +1299,26 @@ def get_jobs():
 def update_job(job_id):
     data = request.json
     conn = get_db()
-    conn.execute(
-        "UPDATE jobs SET status = ?, updated_at = ? WHERE job_id = ?",
-        (data.get('status'), datetime.now().isoformat(), job_id)
-    )
-    conn.commit()
+    
+    # Build update query dynamically
+    allowed_fields = ['status', 'notes', 'viewed', 'applied_date', 'interview_date']
+    updates = []
+    params = []
+    
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f"{field} = ?")
+            params.append(data[field])
+    
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(job_id)
+        
+        query = f"UPDATE jobs SET {', '.join(updates)} WHERE job_id = ?"
+        conn.execute(query, params)
+        conn.commit()
+    
     conn.close()
     return jsonify({'success': True})
 
@@ -779,43 +1334,57 @@ def api_scan():
     conn = get_db()
     new_count = 0
     filtered_count = 0
+    duplicate_count = 0
     
-    for job in jobs:
-        existing = conn.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job['job_id'],)).fetchone()
-        if existing:
-            continue
-        
-        # AI filter and baseline score
-        keep, baseline_score, reason = ai_filter_and_score(job, resume_text)
-        
-        if keep:
-            conn.execute('''
-                INSERT INTO jobs (job_id, title, company, location, url, source, raw_text, 
-                                 baseline_score, created_at, updated_at, email_date, is_filtered)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ''', (job['job_id'], job['title'], job['company'], job['location'], 
-                  job['url'], job['source'], job['raw_text'], baseline_score,
-                  job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at'])))
-            new_count += 1
-            print(f"✓ Kept: {job['title']} - Score {baseline_score} - {reason}")
-        else:
-            # Store filtered jobs but mark them
-            conn.execute('''
-                INSERT INTO jobs (job_id, title, company, location, url, source, raw_text, 
-                                 baseline_score, created_at, updated_at, email_date, is_filtered, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-            ''', (job['job_id'], job['title'], job['company'], job['location'], 
-                  job['url'], job['source'], job['raw_text'], baseline_score,
-                  job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at']), reason))
-            filtered_count += 1
-            print(f"✗ Filtered: {job['title']} - {reason}")
+    try:
+        for job in jobs:
+            # Check if job already exists in DB
+            existing = conn.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job['job_id'],)).fetchone()
+            if existing:
+                duplicate_count += 1
+                print(f"⏭️  Skipping duplicate: {job['title'][:50]}")
+                continue
+            
+            # AI filter and baseline score
+            keep, baseline_score, reason = ai_filter_and_score(job, resume_text)
+            
+            if keep:
+                conn.execute('''
+                    INSERT INTO jobs (job_id, title, company, location, url, source, raw_text, 
+                                     baseline_score, created_at, updated_at, email_date, is_filtered)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ''', (job['job_id'], job['title'], job['company'], job['location'], 
+                      job['url'], job['source'], job['raw_text'], baseline_score,
+                      job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at'])))
+                conn.commit()  # Commit immediately
+                new_count += 1
+                print(f"✓ Kept: {job['title'][:50]} - Score {baseline_score} - {reason}")
+            else:
+                # Store filtered jobs but mark them
+                conn.execute('''
+                    INSERT INTO jobs (job_id, title, company, location, url, source, raw_text, 
+                                     baseline_score, created_at, updated_at, email_date, is_filtered, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                ''', (job['job_id'], job['title'], job['company'], job['location'], 
+                      job['url'], job['source'], job['raw_text'], baseline_score,
+                      job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at']), reason))
+                conn.commit()  # Commit immediately
+                filtered_count += 1
+                print(f"✗ Filtered: {job['title'][:50]} - {reason}")
+    finally:
+        conn.close()
     
-    conn.commit()
-    conn.close()
+    print(f"\n📊 Scan Summary:")
+    print(f"   - Found: {len(jobs)} jobs")
+    print(f"   - New & kept: {new_count}")
+    print(f"   - Filtered: {filtered_count}")
+    print(f"   - Duplicates skipped: {duplicate_count}")
+    
     return jsonify({
         'found': len(jobs), 
         'new': new_count, 
-        'filtered': filtered_count
+        'filtered': filtered_count,
+        'duplicates': duplicate_count
     })
 
 @app.route('/api/analyze', methods=['POST'])
@@ -833,10 +1402,16 @@ def api_analyze():
     for job in jobs:
         print(f"Analyzing: {job['title']}")
         analysis = analyze_job(job, resume_text)
+        
+        # Only change status if it's still 'new', otherwise preserve user's choice
+        new_status = job['status']
+        if job['status'] == 'new':
+            new_status = 'interested' if analysis.get('should_apply') else 'new'
+        
         conn.execute(
             "UPDATE jobs SET score = ?, analysis = ?, status = ?, updated_at = ? WHERE job_id = ?",
             (analysis.get('qualification_score', 0), json.dumps(analysis),
-             'interested' if analysis.get('should_apply') else 'new',
+             new_status,
              datetime.now().isoformat(), job['job_id'])
         )
         conn.commit()
@@ -921,7 +1496,7 @@ def api_capture():
 
 @app.route('/api/analyze-instant', methods=['POST'])
 def api_analyze_instant():
-    """Instant analysis for browser extension."""
+    """Instant analysis for browser extension with strict accuracy."""
     data = request.json
     
     title = data.get('title', '')
@@ -935,15 +1510,62 @@ def api_analyze_instant():
     if not resume_text:
         return jsonify({'error': 'No resumes found'}), 400
     
-    temp_job = {
-        'title': title, 'company': company,
-        'location': data.get('location', ''),
-        'raw_text': description[:2000], 'description': description
-    }
+    client = anthropic.Anthropic()
     
-    analysis = analyze_job(temp_job, resume_text)
+    prompt = f"""Analyze job fit with STRICT ACCURACY. Only mention roles/skills candidate ACTUALLY has.
+
+CANDIDATE'S RESUME:
+{resume_text}
+
+JOB LISTING:
+Title: {title}
+Company: {company}
+Description: {description[:2000]}
+
+CRITICAL RULES:
+1. ONLY cite job titles the candidate has held (check resume carefully)
+2. ONLY mention technologies/tools explicitly in resume
+3. Do NOT invent experience or extrapolate skills
+4. should_apply = true ONLY if score >= 65 AND no major red flags
+5. Red flags: requires 5+ years when candidate has 2, wrong tech stack entirely, senior leadership position
+
+SCORING:
+- 80-100: Strong match, candidate has done similar work
+- 60-79: Good match, meets most requirements with minor gaps
+- 40-59: Partial match, missing key skills but could learn
+- 20-39: Weak match, significant gaps in experience/skills
+- 1-19: Very poor match, wrong level or domain entirely
+
+Return ONLY valid JSON:
+{{
+    "qualification_score": <1-100>,
+    "should_apply": <bool>,
+    "strengths": ["actual matching skills from resume", "relevant experience candidate has"],
+    "gaps": ["specific missing requirements", "areas to develop"],
+    "recommendation": "Honest 2-3 sentence assessment based on actual resume fit",
+    "resume_to_use": "backend|cloud|fullstack"
+}}
+"""
     
-    return jsonify({'analysis': analysis, 'job': temp_job})
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        response_text = response.content[0].text
+        match = re.search(r'\{[\s\S]*\}', response_text)
+        
+        if match:
+            analysis = json.loads(match.group())
+        else:
+            raise ValueError("No JSON in response")
+        
+        return jsonify({'analysis': analysis, 'job': {'title': title, 'company': company}})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/wwr', methods=['POST'])
 def api_scan_wwr():
@@ -957,40 +1579,45 @@ def api_scan_wwr():
     conn = get_db()
     new_count = 0
     filtered_count = 0
+    duplicate_count = 0
     
-    for job in jobs:
-        existing = conn.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job['job_id'],)).fetchone()
-        if existing:
-            continue
-        
-        keep, baseline_score, reason = ai_filter_and_score(job, resume_text)
-        
-        if keep:
-            conn.execute('''
-                INSERT INTO jobs (job_id, title, company, location, url, source, description, raw_text, 
-                                 baseline_score, created_at, updated_at, email_date, is_filtered)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ''', (job['job_id'], job['title'], job['company'], job['location'], 
-                  job['url'], job['source'], job.get('description', ''), job['raw_text'], baseline_score,
-                  job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at'])))
-            new_count += 1
-        else:
-            conn.execute('''
-                INSERT INTO jobs (job_id, title, company, location, url, source, description, raw_text, 
-                                 baseline_score, created_at, updated_at, email_date, is_filtered, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-            ''', (job['job_id'], job['title'], job['company'], job['location'], 
-                  job['url'], job['source'], job.get('description', ''), job['raw_text'], baseline_score,
-                  job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at']), reason))
-            filtered_count += 1
+    try:
+        for job in jobs:
+            existing = conn.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job['job_id'],)).fetchone()
+            if existing:
+                duplicate_count += 1
+                continue
+            
+            keep, baseline_score, reason = ai_filter_and_score(job, resume_text)
+            
+            if keep:
+                conn.execute('''
+                    INSERT INTO jobs (job_id, title, company, location, url, source, raw_text, 
+                                     baseline_score, created_at, updated_at, email_date, is_filtered)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ''', (job['job_id'], job['title'], job['company'], job['location'], 
+                      job['url'], job['source'], job.get('description', job['raw_text']), baseline_score,
+                      job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at'])))
+                conn.commit()  # Commit immediately
+                new_count += 1
+            else:
+                conn.execute('''
+                    INSERT INTO jobs (job_id, title, company, location, url, source, raw_text, 
+                                     baseline_score, created_at, updated_at, email_date, is_filtered, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                ''', (job['job_id'], job['title'], job['company'], job['location'], 
+                      job['url'], job['source'], job.get('description', job['raw_text']), baseline_score,
+                      job['created_at'], datetime.now().isoformat(), job.get('email_date', job['created_at']), reason))
+                conn.commit()  # Commit immediately
+                filtered_count += 1
+    finally:
+        conn.close()
     
-    conn.commit()
-    conn.close()
-    return jsonify({'found': len(jobs), 'new': new_count, 'filtered': filtered_count})
+    return jsonify({'found': len(jobs), 'new': new_count, 'filtered': filtered_count, 'duplicates': duplicate_count})
 
 @app.route('/api/generate-cover-letter', methods=['POST'])
 def api_generate_cover_letter():
-    """Generate cover letter for extension."""
+    """Generate cover letter for extension with accurate resume matching."""
     data = request.json
     job = data.get('job', {})
     analysis = data.get('analysis', {})
@@ -1005,23 +1632,27 @@ def api_generate_cover_letter():
     
     prompt = f"""Write a tailored cover letter (3-4 paragraphs, under 350 words).
 
+CRITICAL: Only mention experience and skills the candidate ACTUALLY has from their resume.
+
+CANDIDATE'S RESUME:
+{resume_text}
+
 JOB:
 Title: {job.get('title')}
 Company: {job.get('company')}
 Description: {job.get('description', '')[:1000]}
 
-CANDIDATE RESUME:
-{resume_text}
-
-KEY STRENGTHS TO HIGHLIGHT:
+KEY STRENGTHS (verified from resume):
 {strengths}
 
-Write a professional, enthusiastic cover letter. Include:
-1. Strong opening expressing interest
-2. 2 paragraphs highlighting relevant experience and achievements
-3. Closing with call to action
+INSTRUCTIONS:
+1. ONLY cite projects, roles, and technologies from the resume
+2. Use specific examples and metrics from resume
+3. Do NOT invent experience or extrapolate skills
+4. Keep professional but enthusiastic tone
+5. 3-4 paragraphs: opening, 2 body (experience/fit), closing
 
-Write only the cover letter text (no subject line, no extra formatting):"""
+Write only the cover letter text (no subject line):"""
     
     try:
         response = client.messages.create(
@@ -1036,7 +1667,7 @@ Write only the cover letter text (no subject line, no extra formatting):"""
 
 @app.route('/api/generate-answer', methods=['POST'])
 def api_generate_answer():
-    """Generate interview answer for extension."""
+    """Generate interview answer with accurate resume references."""
     data = request.json
     job = data.get('job', {})
     question = data.get('question')
@@ -1051,7 +1682,7 @@ def api_generate_answer():
     
     client = anthropic.Anthropic()
     
-    prompt = f"""Generate a strong interview answer for this question.
+    prompt = f"""Generate a strong interview answer using ONLY actual resume content.
 
 QUESTION: {question}
 
@@ -1060,21 +1691,21 @@ Title: {job.get('title')}
 Company: {job.get('company')}
 Description: {job.get('description', '')[:500]}
 
-CANDIDATE RESUME:
+CANDIDATE'S RESUME:
 {resume_text}
 
-ANALYSIS INSIGHTS:
+VERIFIED ANALYSIS:
 Strengths: {', '.join(analysis.get('strengths', []))}
 Gaps: {', '.join(analysis.get('gaps', []))}
 
-Generate a compelling 2-3 paragraph answer that:
-1. Directly answers the question
-2. Uses specific examples from the resume
-3. Connects to the job requirements
-4. Sounds natural and conversational (not rehearsed)
-5. Is honest but strategic about any weaknesses
+CRITICAL RULES:
+1. ONLY cite projects, roles, metrics from the actual resume
+2. Do NOT invent experience or extrapolate skills
+3. Use specific examples with concrete details
+4. Be honest about gaps but frame positively
+5. Natural, conversational tone (not rehearsed)
 
-Write only the answer (2-3 paragraphs, 150-200 words):"""
+Generate 2-3 paragraph answer (150-200 words):"""
     
     try:
         response = client.messages.create(
@@ -1086,6 +1717,42 @@ Write only the answer (2-3 paragraphs, 150-200 words):"""
         return jsonify({'answer': answer})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/watchlist', methods=['GET'])
+def get_watchlist():
+    conn = get_db()
+    items = [dict(row) for row in conn.execute(
+        "SELECT * FROM watchlist ORDER BY created_at DESC"
+    ).fetchall()]
+    conn.close()
+    return jsonify({'items': items})
+
+@app.route('/api/watchlist', methods=['POST'])
+def add_watchlist():
+    data = request.json
+    company = data.get('company', '').strip()
+    url = data.get('url', '').strip()
+    notes = data.get('notes', '').strip()
+    
+    if not company:
+        return jsonify({'error': 'Company required'}), 400
+    
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO watchlist (company, url, notes, created_at) VALUES (?, ?, ?, ?)",
+        (company, url, notes, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/watchlist/<int:watch_id>', methods=['DELETE'])
+def delete_watchlist(watch_id):
+    conn = get_db()
+    conn.execute("DELETE FROM watchlist WHERE id = ?", (watch_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 if __name__ == '__main__':
     init_db()
