@@ -79,7 +79,7 @@ WWR_FEEDS = [
     'https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss',
 ]
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='dist/assets', static_url_path='/assets')
 CORS(app)
 
 # ============== URL Cleaning ==============
@@ -2080,7 +2080,12 @@ DASHBOARD_HTML = '''
 
 @app.route('/')
 def dashboard():
-    return render_template_string(DASHBOARD_HTML)
+    # Serve the built React app from dist folder
+    dist_index = APP_DIR / 'dist' / 'index.html'
+    if dist_index.exists():
+        return dist_index.read_text()
+    else:
+        return "Frontend not built! Run 'npm run build' first.", 500
 
 @app.route('/api/jobs')
 def get_jobs():
