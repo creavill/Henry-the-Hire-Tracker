@@ -243,6 +243,37 @@ def init_db():
         )
     ''')
 
+    # Resume management tables
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS resume_variants (
+            resume_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            focus_areas TEXT,
+            target_roles TEXT,
+            file_path TEXT,
+            content TEXT,
+            content_hash TEXT,
+            usage_count INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            is_active INTEGER DEFAULT 1
+        )
+    ''')
+
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS resume_usage_log (
+            log_id TEXT PRIMARY KEY,
+            resume_id TEXT,
+            job_id TEXT,
+            recommended_at TEXT,
+            confidence_score REAL,
+            user_selected INTEGER DEFAULT 0,
+            reasoning TEXT,
+            FOREIGN KEY (resume_id) REFERENCES resume_variants(resume_id),
+            FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+        )
+    ''')
+
     # Migration: Add job_id column if it doesn't exist
     try:
         conn.execute("SELECT job_id FROM followups LIMIT 1")
@@ -256,7 +287,17 @@ def init_db():
     except sqlite3.OperationalError:
         print("Migrating database: adding 'viewed' column...")
         conn.execute("ALTER TABLE jobs ADD COLUMN viewed INTEGER DEFAULT 0")
-    
+
+    # Migration: Add resume-related columns to jobs table
+    try:
+        conn.execute("SELECT recommended_resume_id FROM jobs LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Migrating database: adding resume-related columns to jobs...")
+        conn.execute("ALTER TABLE jobs ADD COLUMN recommended_resume_id TEXT")
+        conn.execute("ALTER TABLE jobs ADD COLUMN resume_recommendation TEXT")
+        conn.execute("ALTER TABLE jobs ADD COLUMN selected_resume_id TEXT")
+        conn.execute("ALTER TABLE jobs ADD COLUMN resume_match_score REAL")
+
     conn.commit()
     conn.close()
 
@@ -1066,6 +1107,209 @@ def load_resumes() -> str:
         )
 
     return "\n\n---\n\n".join(resumes)
+
+
+def migrate_file_resumes_to_db():
+    """
+    One-time migration to import existing resume files into the database.
+    Checks if resumes already exist to avoid duplicates.
+    """
+    conn = get_db()
+    migrated = 0
+
+    for resume_path in CONFIG.resume_files:
+        full_path = APP_DIR / resume_path
+        if not full_path.exists():
+            continue
+
+        # Read resume content
+        content = full_path.read_text()
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        # Check if already exists
+        existing = conn.execute(
+            "SELECT resume_id FROM resume_variants WHERE content_hash = ?",
+            (content_hash,)
+        ).fetchone()
+
+        if existing:
+            print(f"✓ Resume already in database: {resume_path}")
+            continue
+
+        # Create resume entry
+        resume_id = str(uuid.uuid4())[:16]
+        name = full_path.stem.replace('_', ' ').title()
+        now = datetime.now().isoformat()
+
+        conn.execute('''
+            INSERT INTO resume_variants (
+                resume_id, name, file_path, content, content_hash,
+                created_at, updated_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        ''', (resume_id, name, str(resume_path), content, content_hash, now, now))
+
+        migrated += 1
+        print(f"✓ Migrated resume: {name}")
+
+    conn.commit()
+    conn.close()
+
+    if migrated > 0:
+        print(f"\n✅ Migrated {migrated} resume(s) to database!")
+    return migrated
+
+
+def load_resumes_from_db() -> List[Dict]:
+    """
+    Load all active resume variants from the database.
+
+    Returns:
+        List of resume dictionaries with id, name, content, etc.
+    """
+    conn = get_db()
+    resumes = conn.execute("""
+        SELECT * FROM resume_variants
+        WHERE is_active = 1
+        ORDER BY usage_count DESC, created_at DESC
+    """).fetchall()
+    conn.close()
+
+    return [dict(r) for r in resumes]
+
+
+def get_combined_resume_text() -> str:
+    """
+    Get combined text from all active resumes for AI analysis.
+    Falls back to file-based loading if no resumes in database.
+
+    Returns:
+        Combined resume text from all active resumes
+    """
+    resumes = load_resumes_from_db()
+
+    if not resumes:
+        # Fallback to file-based loading
+        print("⚠️  No resumes in database, falling back to file-based loading...")
+        return load_resumes()
+
+    return "\n\n---\n\n".join([r['content'] for r in resumes])
+
+
+def recommend_resume_for_job(job_description: str, job_title: str = "", job_company: str = "") -> Dict:
+    """
+    Use Claude AI to recommend the best resume for a specific job.
+
+    Args:
+        job_description: Full job description text
+        job_title: Job title (optional, for context)
+        job_company: Company name (optional, for context)
+
+    Returns:
+        Dictionary with recommendation details:
+        {
+            'resume_id': str,
+            'resume_name': str,
+            'confidence': float (0-1),
+            'reasoning': str,
+            'key_requirements': List[str],
+            'resume_strengths': List[str],
+            'resume_gaps': List[str],
+            'alternative_resumes': List[Dict]
+        }
+    """
+    resumes = load_resumes_from_db()
+
+    if not resumes:
+        raise ValueError("No resumes available. Please upload at least one resume.")
+
+    # Format resumes for AI
+    resume_catalog = "\n\n".join([
+        f"Resume ID: {r['resume_id']}\n"
+        f"Name: {r['name']}\n"
+        f"Focus Areas: {r.get('focus_areas', 'Not specified')}\n"
+        f"Target Roles: {r.get('target_roles', 'Not specified')}\n"
+        f"Content Preview: {r['content'][:500]}..."
+        for r in resumes
+    ])
+
+    job_context = f"Job: {job_title} at {job_company}\n\n" if job_title else ""
+
+    prompt = f"""You are a resume selection expert. Analyze this job description and recommend
+the BEST resume from the available options.
+
+{job_context}Job Description:
+{job_description[:2500]}
+
+Available Resumes:
+{resume_catalog}
+
+Analyze the job requirements and each resume's strengths. Return a JSON object with your recommendation:
+
+{{
+  "recommended_resume_id": "<resume_id>",
+  "confidence": 0.85,
+  "reasoning": "This role emphasizes Python microservices and AWS Lambda which aligns perfectly with your Backend_Python_AWS resume's core strengths...",
+  "key_requirements": ["Python", "AWS Lambda", "REST APIs", "PostgreSQL"],
+  "resume_strengths": ["5 years Python experience", "AWS Lambda projects", "FastAPI expertise"],
+  "resume_gaps": ["No Kubernetes mentioned"],
+  "alternative_resumes": [
+    {{
+      "resume_id": "<other_resume_id>",
+      "resume_name": "Cloud_AWS",
+      "confidence": 0.70,
+      "reason": "Strong AWS background but less Python depth"
+    }}
+  ]
+}}
+
+Only recommend alternatives if your confidence in the primary recommendation is below 0.9.
+Be specific about technical requirements and how the resume matches them."""
+
+    try:
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        # Parse JSON response
+        response_text = response.content[0].text
+
+        # Extract JSON from response (handle markdown code blocks)
+        if "```json" in response_text:
+            json_str = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            json_str = response_text.split("```")[1].split("```")[0].strip()
+        else:
+            json_str = response_text.strip()
+
+        recommendation = json.loads(json_str)
+
+        # Find the recommended resume details
+        recommended_resume = next(
+            (r for r in resumes if r['resume_id'] == recommendation['recommended_resume_id']),
+            resumes[0]  # Fallback to first resume
+        )
+
+        # Add resume name to response
+        recommendation['resume_name'] = recommended_resume['name']
+
+        return recommendation
+
+    except Exception as e:
+        print(f"Error in resume recommendation: {e}")
+        # Fallback: return first resume with low confidence
+        return {
+            'resume_id': resumes[0]['resume_id'],
+            'resume_name': resumes[0]['name'],
+            'confidence': 0.5,
+            'reasoning': f"Unable to generate AI recommendation ({str(e)}). Defaulting to first available resume.",
+            'key_requirements': [],
+            'resume_strengths': [],
+            'resume_gaps': [],
+            'alternative_resumes': []
+        }
 
 
 def ai_filter_and_score(job: Dict, resume_text: str) -> Tuple[bool, int, str]:
@@ -2664,10 +2908,362 @@ def delete_external_application(app_id):
     conn.close()
     return jsonify({'success': True})
 
+# ============== Resume Management ==============
+@app.route('/api/resumes', methods=['GET'])
+def get_resumes():
+    """Get all resume variants."""
+    print("[Backend] GET /api/resumes")
+    resumes = load_resumes_from_db()
+    print(f"[Backend] Returning {len(resumes)} resumes")
+    return jsonify({'resumes': resumes})
+
+@app.route('/api/resumes/<resume_id>', methods=['GET'])
+def get_resume(resume_id):
+    """Get a specific resume by ID."""
+    print(f"[Backend] GET /api/resumes/{resume_id}")
+    conn = get_db()
+    resume = conn.execute(
+        "SELECT * FROM resume_variants WHERE resume_id = ?",
+        (resume_id,)
+    ).fetchone()
+    conn.close()
+
+    if not resume:
+        return jsonify({'error': 'Resume not found'}), 404
+
+    return jsonify({'resume': dict(resume)})
+
+@app.route('/api/resumes', methods=['POST'])
+def create_resume():
+    """
+    Create a new resume variant.
+    Accepts either file upload or direct content.
+    """
+    print("[Backend] POST /api/resumes")
+    data = request.json
+
+    # Validate required fields
+    if not data.get('name'):
+        return jsonify({'error': 'name is required'}), 400
+
+    if not data.get('content'):
+        return jsonify({'error': 'content is required'}), 400
+
+    # Generate ID and hash
+    resume_id = str(uuid.uuid4())[:16]
+    content = data['content']
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    now = datetime.now().isoformat()
+
+    # Get optional fields
+    focus_areas = data.get('focus_areas', '')
+    target_roles = data.get('target_roles', '')
+    file_path = data.get('file_path', '')
+
+    try:
+        conn = get_db()
+
+        # Check for duplicate content
+        existing = conn.execute(
+            "SELECT resume_id, name FROM resume_variants WHERE content_hash = ?",
+            (content_hash,)
+        ).fetchone()
+
+        if existing:
+            conn.close()
+            return jsonify({
+                'error': f'This resume already exists as "{existing["name"]}"',
+                'existing_id': existing['resume_id']
+            }), 409
+
+        # Insert new resume
+        conn.execute('''
+            INSERT INTO resume_variants (
+                resume_id, name, focus_areas, target_roles, file_path,
+                content, content_hash, created_at, updated_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ''', (resume_id, data['name'], focus_areas, target_roles, file_path,
+              content, content_hash, now, now))
+
+        conn.commit()
+        conn.close()
+
+        print(f"[Backend] Created resume: {data['name']}")
+        return jsonify({'success': True, 'resume_id': resume_id})
+
+    except Exception as e:
+        print(f"[Backend] Error creating resume: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/resumes/<resume_id>', methods=['PATCH'])
+def update_resume(resume_id):
+    """Update resume metadata (not content - that requires new variant)."""
+    print(f"[Backend] PATCH /api/resumes/{resume_id}")
+    data = request.json
+    conn = get_db()
+
+    # Build update query for metadata only
+    allowed_fields = ['name', 'focus_areas', 'target_roles', 'is_active']
+    updates = []
+    params = []
+
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f"{field} = ?")
+            params.append(data[field])
+
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(resume_id)
+
+        query = f"UPDATE resume_variants SET {', '.join(updates)} WHERE resume_id = ?"
+        conn.execute(query, params)
+        conn.commit()
+
+    conn.close()
+    print(f"[Backend] Updated resume: {resume_id}")
+    return jsonify({'success': True})
+
+@app.route('/api/resumes/<resume_id>', methods=['DELETE'])
+def delete_resume(resume_id):
+    """Soft delete a resume (sets is_active = 0)."""
+    print(f"[Backend] DELETE /api/resumes/{resume_id}")
+    conn = get_db()
+
+    conn.execute(
+        "UPDATE resume_variants SET is_active = 0, updated_at = ? WHERE resume_id = ?",
+        (datetime.now().isoformat(), resume_id)
+    )
+
+    conn.commit()
+    conn.close()
+
+    print(f"[Backend] Deactivated resume: {resume_id}")
+    return jsonify({'success': True})
+
+# ============== Resume Recommendations ==============
+@app.route('/api/jobs/<job_id>/recommend-resume', methods=['POST'])
+def get_resume_recommendation(job_id):
+    """Get AI resume recommendation for a specific job."""
+    print(f"[Backend] POST /api/jobs/{job_id}/recommend-resume")
+
+    conn = get_db()
+    job = conn.execute(
+        "SELECT * FROM jobs WHERE job_id = ?",
+        (job_id,)
+    ).fetchone()
+
+    if not job:
+        conn.close()
+        return jsonify({'error': 'Job not found'}), 404
+
+    job_dict = dict(job)
+
+    # Check if recommendation already exists
+    if job_dict.get('resume_recommendation'):
+        try:
+            cached_rec = json.loads(job_dict['resume_recommendation'])
+            conn.close()
+            print(f"[Backend] Returning cached recommendation for {job_id}")
+            return jsonify({'recommendation': cached_rec, 'cached': True})
+        except:
+            pass  # If parsing fails, generate new recommendation
+
+    # Generate new recommendation
+    try:
+        recommendation = recommend_resume_for_job(
+            job_dict.get('raw_text', ''),
+            job_dict.get('title', ''),
+            job_dict.get('company', '')
+        )
+
+        # Store recommendation in database
+        now = datetime.now().isoformat()
+        conn.execute("""
+            UPDATE jobs
+            SET recommended_resume_id = ?,
+                resume_recommendation = ?,
+                resume_match_score = ?,
+                updated_at = ?
+            WHERE job_id = ?
+        """, (
+            recommendation['resume_id'],
+            json.dumps(recommendation),
+            recommendation['confidence'],
+            now,
+            job_id
+        ))
+
+        # Log the recommendation
+        log_id = str(uuid.uuid4())[:16]
+        conn.execute("""
+            INSERT INTO resume_usage_log (
+                log_id, resume_id, job_id, recommended_at,
+                confidence_score, reasoning
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            log_id,
+            recommendation['resume_id'],
+            job_id,
+            now,
+            recommendation['confidence'],
+            recommendation['reasoning']
+        ))
+
+        # Update resume usage count
+        conn.execute("""
+            UPDATE resume_variants
+            SET usage_count = usage_count + 1
+            WHERE resume_id = ?
+        """, (recommendation['resume_id'],))
+
+        conn.commit()
+        conn.close()
+
+        print(f"[Backend] Generated resume recommendation for {job_id}: {recommendation['resume_name']}")
+        return jsonify({'recommendation': recommendation, 'cached': False})
+
+    except Exception as e:
+        conn.close()
+        print(f"[Backend] Error generating recommendation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/jobs/recommend-resumes-batch', methods=['POST'])
+def batch_recommend_resumes():
+    """
+    Generate resume recommendations for multiple jobs in batch.
+    Processes up to 100 jobs with rate limiting.
+    """
+    print("[Backend] POST /api/jobs/recommend-resumes-batch")
+    data = request.json
+    job_ids = data.get('job_ids', [])
+
+    if not job_ids:
+        return jsonify({'error': 'job_ids required'}), 400
+
+    if len(job_ids) > 100:
+        return jsonify({'error': 'Maximum 100 jobs per batch'}), 400
+
+    conn = get_db()
+    results = []
+    errors = []
+
+    for idx, job_id in enumerate(job_ids):
+        try:
+            # Get job
+            job = conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,)
+            ).fetchone()
+
+            if not job:
+                errors.append({'job_id': job_id, 'error': 'Job not found'})
+                continue
+
+            job_dict = dict(job)
+
+            # Skip if already has recommendation
+            if job_dict.get('resume_recommendation'):
+                results.append({
+                    'job_id': job_id,
+                    'status': 'skipped',
+                    'reason': 'Already has recommendation'
+                })
+                continue
+
+            # Generate recommendation
+            recommendation = recommend_resume_for_job(
+                job_dict.get('raw_text', ''),
+                job_dict.get('title', ''),
+                job_dict.get('company', '')
+            )
+
+            # Store in database
+            now = datetime.now().isoformat()
+            conn.execute("""
+                UPDATE jobs
+                SET recommended_resume_id = ?,
+                    resume_recommendation = ?,
+                    resume_match_score = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+            """, (
+                recommendation['resume_id'],
+                json.dumps(recommendation),
+                recommendation['confidence'],
+                now,
+                job_id
+            ))
+
+            # Log the recommendation
+            log_id = str(uuid.uuid4())[:16]
+            conn.execute("""
+                INSERT INTO resume_usage_log (
+                    log_id, resume_id, job_id, recommended_at,
+                    confidence_score, reasoning
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                log_id,
+                recommendation['resume_id'],
+                job_id,
+                now,
+                recommendation['confidence'],
+                recommendation['reasoning']
+            ))
+
+            # Update usage count
+            conn.execute("""
+                UPDATE resume_variants
+                SET usage_count = usage_count + 1
+                WHERE resume_id = ?
+            """, (recommendation['resume_id'],))
+
+            results.append({
+                'job_id': job_id,
+                'status': 'success',
+                'resume_id': recommendation['resume_id'],
+                'resume_name': recommendation['resume_name'],
+                'confidence': recommendation['confidence']
+            })
+
+            # Rate limiting: small delay between API calls
+            if idx < len(job_ids) - 1:  # Don't delay after last one
+                import time
+                time.sleep(0.5)
+
+        except Exception as e:
+            errors.append({'job_id': job_id, 'error': str(e)})
+            print(f"[Backend] Error processing {job_id}: {e}")
+
+    conn.commit()
+    conn.close()
+
+    success_count = len([r for r in results if r['status'] == 'success'])
+    print(f"[Backend] Batch recommendation complete: {success_count}/{len(job_ids)} successful")
+
+    return jsonify({
+        'success': True,
+        'results': results,
+        'errors': errors,
+        'summary': {
+            'total': len(job_ids),
+            'successful': success_count,
+            'skipped': len([r for r in results if r['status'] == 'skipped']),
+            'failed': len(errors)
+        }
+    })
+
 if __name__ == '__main__':
     # Initialize database
     init_db()
     RESUMES_DIR.mkdir(exist_ok=True)
+
+    # Migrate existing resumes from files to database
+    try:
+        migrate_file_resumes_to_db()
+    except Exception as e:
+        print(f"⚠️  Resume migration skipped: {e}")
 
     # Display startup info
     print("\n" + "="*60)
