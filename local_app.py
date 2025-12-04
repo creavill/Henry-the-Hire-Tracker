@@ -1652,7 +1652,7 @@ DASHBOARD_HTML = '''
         }
         
         async function removeFromWatchlist(id) {
-            if (!confirm('Remove from watchlist?')) return;
+            console.log('[Dashboard] Removing from watchlist:', id);
             await fetch(`/api/watchlist/${id}`, {method: 'DELETE'});
             loadWatchlist();
         }
@@ -1716,7 +1716,7 @@ DASHBOARD_HTML = '''
         }
         
         async function hideJob(jobId) {
-            if (!confirm('Hide this job?')) return;
+            console.log('[Dashboard] Hiding job:', jobId);
             await fetch(`/api/jobs/${jobId}`, {
                 method: 'PATCH',
                 headers: {'Content-Type': 'application/json'},

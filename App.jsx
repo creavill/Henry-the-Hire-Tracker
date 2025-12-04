@@ -322,23 +322,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    console.log('[Frontend] Component mounted, fetching initial data...');
     fetchJobs();
     fetchExternalApps();
+  }, [fetchJobs, fetchExternalApps]);
 
+  // Separate effect for polling to avoid recreating interval
+  useEffect(() => {
     // Poll for external applications every 5 seconds to catch updates from extension
     console.log('[Frontend] Setting up polling for external applications (5s interval)');
     const pollInterval = setInterval(() => {
-      if (activeView === 'external') {
-        console.log('[Frontend] Polling for external applications updates...');
-        fetchExternalApps();
-      }
+      console.log('[Frontend] Polling for external applications updates...');
+      fetchExternalApps();
     }, 5000);
 
     return () => {
       console.log('[Frontend] Cleaning up polling interval');
       clearInterval(pollInterval);
     };
-  }, [fetchJobs, fetchExternalApps, activeView]);
+  }, [fetchExternalApps]);
 
   const handleScan = async () => {
     setScanning(true);
