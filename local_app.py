@@ -22,6 +22,7 @@ import re
 import base64
 import sqlite3
 import hashlib
+import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -157,6 +158,7 @@ def init_db():
     - scan_history: Track email scan timestamps to avoid re-processing
     - watchlist: Companies to monitor for future openings
     - followups: Interview and application follow-up tracking
+    - external_applications: Track applications made outside the system
 
     Uses WAL (Write-Ahead Logging) mode for better concurrency when
     multiple processes/threads access the database.
@@ -216,6 +218,28 @@ def init_db():
             email_date TEXT,
             job_id TEXT,
             created_at TEXT
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS external_applications (
+            app_id TEXT PRIMARY KEY,
+            job_id TEXT,
+            title TEXT NOT NULL,
+            company TEXT NOT NULL,
+            location TEXT,
+            url TEXT,
+            source TEXT NOT NULL,
+            application_method TEXT,
+            applied_date TEXT NOT NULL,
+            contact_name TEXT,
+            contact_email TEXT,
+            status TEXT DEFAULT 'applied',
+            follow_up_date TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            is_linked_to_job INTEGER DEFAULT 0,
+            FOREIGN KEY (job_id) REFERENCES jobs(job_id)
         )
     ''')
 
@@ -2427,6 +2451,142 @@ def add_watchlist():
 def delete_watchlist(watch_id):
     conn = get_db()
     conn.execute("DELETE FROM watchlist WHERE id = ?", (watch_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+# ============== External Applications ==============
+@app.route('/api/external-applications', methods=['GET'])
+def get_external_applications():
+    """
+    Get all external applications with optional filtering.
+    Query params: status, company, source
+    """
+    conn = get_db()
+
+    # Build query with optional filters
+    query = "SELECT * FROM external_applications WHERE 1=1"
+    params = []
+
+    if request.args.get('status'):
+        query += " AND status = ?"
+        params.append(request.args.get('status'))
+
+    if request.args.get('company'):
+        query += " AND company LIKE ?"
+        params.append(f"%{request.args.get('company')}%")
+
+    if request.args.get('source'):
+        query += " AND source = ?"
+        params.append(request.args.get('source'))
+
+    query += " ORDER BY applied_date DESC"
+
+    applications = [dict(row) for row in conn.execute(query, params).fetchall()]
+    conn.close()
+
+    return jsonify({'applications': applications})
+
+@app.route('/api/external-applications', methods=['POST'])
+def create_external_application():
+    """
+    Create a new external application.
+    Required fields: title, company, applied_date, source
+    """
+    data = request.json
+
+    # Validate required fields
+    required_fields = ['title', 'company', 'applied_date', 'source']
+    for field in required_fields:
+        if not data.get(field):
+            return jsonify({'error': f'{field} is required'}), 400
+
+    # Generate unique ID
+    app_id = str(uuid.uuid4())[:16]
+
+    # Get optional fields
+    job_id = data.get('job_id')
+    location = data.get('location', '')
+    url = data.get('url', '')
+    application_method = data.get('application_method', '')
+    contact_name = data.get('contact_name', '')
+    contact_email = data.get('contact_email', '')
+    status = data.get('status', 'applied')
+    follow_up_date = data.get('follow_up_date')
+    notes = data.get('notes', '')
+    is_linked_to_job = 1 if job_id else 0
+
+    now = datetime.now().isoformat()
+
+    conn = get_db()
+    conn.execute('''
+        INSERT INTO external_applications (
+            app_id, job_id, title, company, location, url, source,
+            application_method, applied_date, contact_name, contact_email,
+            status, follow_up_date, notes, created_at, updated_at, is_linked_to_job
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        app_id, job_id, data['title'], data['company'], location, url, data['source'],
+        application_method, data['applied_date'], contact_name, contact_email,
+        status, follow_up_date, notes, now, now, is_linked_to_job
+    ))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'success': True, 'app_id': app_id})
+
+@app.route('/api/external-applications/<app_id>', methods=['GET'])
+def get_external_application(app_id):
+    """Get details of a specific external application."""
+    conn = get_db()
+    app = conn.execute(
+        "SELECT * FROM external_applications WHERE app_id = ?",
+        (app_id,)
+    ).fetchone()
+    conn.close()
+
+    if not app:
+        return jsonify({'error': 'Application not found'}), 404
+
+    return jsonify({'application': dict(app)})
+
+@app.route('/api/external-applications/<app_id>', methods=['PATCH'])
+def update_external_application(app_id):
+    """Update an external application."""
+    data = request.json
+    conn = get_db()
+
+    # Build update query dynamically
+    allowed_fields = [
+        'title', 'company', 'location', 'url', 'source', 'application_method',
+        'applied_date', 'contact_name', 'contact_email', 'status',
+        'follow_up_date', 'notes', 'job_id', 'is_linked_to_job'
+    ]
+    updates = []
+    params = []
+
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f"{field} = ?")
+            params.append(data[field])
+
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(app_id)
+
+        query = f"UPDATE external_applications SET {', '.join(updates)} WHERE app_id = ?"
+        conn.execute(query, params)
+        conn.commit()
+
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/external-applications/<app_id>', methods=['DELETE'])
+def delete_external_application(app_id):
+    """Delete an external application."""
+    conn = get_db()
+    conn.execute("DELETE FROM external_applications WHERE app_id = ?", (app_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})

@@ -160,6 +160,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="analyze">📊 Analyze</button>
     <button class="tab" data-tab="apply">✍️ Apply</button>
+    <button class="tab" data-tab="external">📝 Track</button>
     <button class="tab" data-tab="questions">💬 Questions</button>
   </div>
   
@@ -200,7 +201,80 @@
       
       <button class="btn-success" id="markAppliedBtn">✅ Mark as Applied</button>
     </div>
-    
+
+    <div id="external-section" class="section">
+      <div class="form-group">
+        <label>Job Title *</label>
+        <input type="text" id="ext-title" placeholder="Senior Backend Engineer">
+      </div>
+
+      <div class="form-group">
+        <label>Company *</label>
+        <input type="text" id="ext-company" placeholder="Company name">
+      </div>
+
+      <div class="form-group">
+        <label>Location</label>
+        <input type="text" id="ext-location" placeholder="Remote / San Francisco, CA">
+      </div>
+
+      <div class="form-group">
+        <label>Job URL</label>
+        <input type="text" id="ext-url" placeholder="https://...">
+        <div class="hint">Optional - will auto-fill from current tab</div>
+      </div>
+
+      <div class="form-group">
+        <label>Application Source *</label>
+        <select id="ext-source" style="width: 100%; padding: 10px 12px; border: 1.5px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+          <option value="">Select source...</option>
+          <option value="cold_email">Cold Email</option>
+          <option value="referral">Referral</option>
+          <option value="recruiter">Recruiter Contact</option>
+          <option value="company_website">Company Website</option>
+          <option value="linkedin_message">LinkedIn Message</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Application Method</label>
+        <select id="ext-method" style="width: 100%; padding: 10px 12px; border: 1.5px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+          <option value="">Select method...</option>
+          <option value="email">Email</option>
+          <option value="form">Online Form</option>
+          <option value="linkedin_message">LinkedIn Message</option>
+          <option value="phone">Phone</option>
+          <option value="in_person">In Person</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Applied Date *</label>
+        <input type="date" id="ext-applied-date">
+        <div class="hint">When you applied (defaults to today)</div>
+      </div>
+
+      <div class="form-group">
+        <label>Contact Name</label>
+        <input type="text" id="ext-contact-name" placeholder="Hiring manager or recruiter name">
+      </div>
+
+      <div class="form-group">
+        <label>Contact Email</label>
+        <input type="email" id="ext-contact-email" placeholder="contact@company.com">
+      </div>
+
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="ext-notes" class="textarea-small" placeholder="Additional context about this application..."></textarea>
+      </div>
+
+      <button class="btn-success" id="saveExternalBtn">✅ Save External Application</button>
+      <div id="external-result"></div>
+    </div>
+
     <div id="questions-section" class="section">
       <div class="form-group">
         <label>Select Question Template</label>

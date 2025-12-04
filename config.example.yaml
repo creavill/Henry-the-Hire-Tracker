@@ -162,6 +162,40 @@ tracking:
   # Remind to follow up after X days
   followup_reminder_days: 7
 
+# ===== EXTERNAL APPLICATIONS =====
+external_applications:
+  # Enable tracking of applications made outside the system
+  enabled: true
+
+  # Default follow-up reminder days for external applications
+  default_follow_up_days: 7
+
+  # Available application sources
+  sources:
+    - "cold_email"
+    - "referral"
+    - "recruiter"
+    - "company_website"
+    - "linkedin_message"
+    - "other"
+
+  # Available application methods
+  methods:
+    - "email"
+    - "form"
+    - "linkedin_message"
+    - "phone"
+    - "in_person"
+    - "other"
+
+  # Available statuses for external applications
+  statuses:
+    - "applied"
+    - "interviewing"
+    - "rejected"
+    - "offer"
+    - "withdrawn"
+
 # ===== NOTIFICATIONS (Future Feature) =====
 notifications:
   enabled: false

@@ -2,6 +2,7 @@ const API_URL = 'http://localhost:5000/api/capture';
 const ANALYZE_URL = 'http://localhost:5000/api/analyze-instant';
 const COVER_LETTER_URL = 'http://localhost:5000/api/generate-cover-letter';
 const ANSWER_URL = 'http://localhost:5000/api/generate-answer';
+const EXTERNAL_APP_URL = 'http://localhost:5000/api/external-applications';
 
 let currentAnalysis = null;
 let currentJobData = null;
@@ -11,16 +12,27 @@ chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
   if (tabs[0]) {
     const url = tabs[0].url;
     currentJobData = { url };
-    
+
     let title = tabs[0].title || '';
     title = title
       .replace(/\| LinkedIn$/, '')
       .replace(/- Indeed\.com$/, '')
       .replace(/\| Glassdoor$/, '')
       .trim();
-    
+
     if (title && title.length > 5) {
       document.getElementById('title').value = title;
+    }
+
+    // Also auto-fill external application form
+    if (document.getElementById('ext-url')) {
+      document.getElementById('ext-url').value = url || '';
+    }
+
+    // Set today's date as default for applied date
+    const today = new Date().toISOString().split('T')[0];
+    if (document.getElementById('ext-applied-date')) {
+      document.getElementById('ext-applied-date').value = today;
     }
   }
 });
@@ -48,7 +60,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('generateCoverBtn').addEventListener('click', generateCoverLetter);
   document.getElementById('markAppliedBtn').addEventListener('click', markApplied);
-  
+
+  // External application tab
+  document.getElementById('saveExternalBtn').addEventListener('click', saveExternalApplication);
+
   // Questions tab
   document.querySelectorAll('.question-list li').forEach(item => {
     item.addEventListener('click', () => {
@@ -283,12 +298,94 @@ async function generateAnswer(questionType) {
   }
 }
 
+// EXTERNAL APPLICATION TAB
+async function saveExternalApplication() {
+  const title = document.getElementById('ext-title').value.trim();
+  const company = document.getElementById('ext-company').value.trim();
+  const location = document.getElementById('ext-location').value.trim();
+  const url = document.getElementById('ext-url').value.trim();
+  const source = document.getElementById('ext-source').value;
+  const method = document.getElementById('ext-method').value;
+  const appliedDate = document.getElementById('ext-applied-date').value;
+  const contactName = document.getElementById('ext-contact-name').value.trim();
+  const contactEmail = document.getElementById('ext-contact-email').value.trim();
+  const notes = document.getElementById('ext-notes').value.trim();
+
+  // Validate required fields
+  if (!title) {
+    showStatus('Job title is required', 'error', 'external-result');
+    return;
+  }
+  if (!company) {
+    showStatus('Company name is required', 'error', 'external-result');
+    return;
+  }
+  if (!source) {
+    showStatus('Application source is required', 'error', 'external-result');
+    return;
+  }
+  if (!appliedDate) {
+    showStatus('Applied date is required', 'error', 'external-result');
+    return;
+  }
+
+  const btn = document.getElementById('saveExternalBtn');
+  btn.disabled = true;
+  btn.textContent = '💾 Saving...';
+
+  try {
+    const response = await fetch(EXTERNAL_APP_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        title,
+        company,
+        location,
+        url,
+        source,
+        application_method: method,
+        applied_date: appliedDate,
+        contact_name: contactName,
+        contact_email: contactEmail,
+        notes
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to save');
+    }
+
+    showStatus('✅ External application saved successfully!', 'success', 'external-result');
+
+    // Clear form
+    document.getElementById('ext-title').value = '';
+    document.getElementById('ext-company').value = '';
+    document.getElementById('ext-location').value = '';
+    document.getElementById('ext-source').value = '';
+    document.getElementById('ext-method').value = '';
+    document.getElementById('ext-contact-name').value = '';
+    document.getElementById('ext-contact-email').value = '';
+    document.getElementById('ext-notes').value = '';
+
+    // Reset date to today
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('ext-applied-date').value = today;
+
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, 'error', 'external-result');
+  }
+
+  btn.disabled = false;
+  btn.textContent = '✅ Save External Application';
+}
+
 // UTILITIES
 function copyText(elementId) {
   const el = document.getElementById(elementId);
   el.select();
   document.execCommand('copy');
-  
+
   alert('Copied to clipboard!');
 }
 
