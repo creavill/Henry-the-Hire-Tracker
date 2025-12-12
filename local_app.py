@@ -159,6 +159,7 @@ def init_db():
     - watchlist: Companies to monitor for future openings
     - followups: Interview and application follow-up tracking
     - external_applications: Track applications made outside the system
+    - tracked_companies: Companies to track with career page and job alert email
 
     Uses WAL (Write-Ahead Logging) mode for better concurrency when
     multiple processes/threads access the database.
@@ -271,6 +272,18 @@ def init_db():
             reasoning TEXT,
             FOREIGN KEY (resume_id) REFERENCES resume_variants(resume_id),
             FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+        )
+    ''')
+
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS tracked_companies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            career_page_url TEXT,
+            job_alert_email TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
         )
     ''')
 
@@ -2709,6 +2722,74 @@ def add_watchlist():
 def delete_watchlist(watch_id):
     conn = get_db()
     conn.execute("DELETE FROM watchlist WHERE id = ?", (watch_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+# ============== Tracked Companies ==============
+@app.route('/api/tracked-companies', methods=['GET'])
+def get_tracked_companies():
+    """Get all tracked companies ordered by most recently added."""
+    conn = get_db()
+    companies = [dict(row) for row in conn.execute(
+        "SELECT * FROM tracked_companies ORDER BY created_at DESC"
+    ).fetchall()]
+    conn.close()
+    return jsonify({'companies': companies})
+
+@app.route('/api/tracked-companies', methods=['POST'])
+def add_tracked_company():
+    """Add a new tracked company."""
+    data = request.json
+    company_name = data.get('company_name', '').strip()
+    career_page_url = data.get('career_page_url', '').strip()
+    job_alert_email = data.get('job_alert_email', '').strip()
+    notes = data.get('notes', '').strip()
+
+    if not company_name:
+        return jsonify({'error': 'Company name is required'}), 400
+
+    conn = get_db()
+    now = datetime.now().isoformat()
+    conn.execute(
+        """INSERT INTO tracked_companies
+           (company_name, career_page_url, job_alert_email, notes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (company_name, career_page_url, job_alert_email, notes, now, now)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/tracked-companies/<int:company_id>', methods=['PATCH'])
+def update_tracked_company(company_id):
+    """Update a tracked company."""
+    data = request.json
+    company_name = data.get('company_name', '').strip()
+    career_page_url = data.get('career_page_url', '').strip()
+    job_alert_email = data.get('job_alert_email', '').strip()
+    notes = data.get('notes', '').strip()
+
+    if not company_name:
+        return jsonify({'error': 'Company name is required'}), 400
+
+    conn = get_db()
+    now = datetime.now().isoformat()
+    conn.execute(
+        """UPDATE tracked_companies
+           SET company_name = ?, career_page_url = ?, job_alert_email = ?, notes = ?, updated_at = ?
+           WHERE id = ?""",
+        (company_name, career_page_url, job_alert_email, notes, now, company_id)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/tracked-companies/<int:company_id>', methods=['DELETE'])
+def delete_tracked_company(company_id):
+    """Delete a tracked company."""
+    conn = get_db()
+    conn.execute("DELETE FROM tracked_companies WHERE id = ?", (company_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})

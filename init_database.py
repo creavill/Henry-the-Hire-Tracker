@@ -103,6 +103,20 @@ def init_db():
         )
     ''')
 
+    # Create tracked_companies table
+    print("Creating 'tracked_companies' table...")
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS tracked_companies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            career_page_url TEXT,
+            job_alert_email TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    ''')
+
     conn.commit()
 
     # Verify tables were created
