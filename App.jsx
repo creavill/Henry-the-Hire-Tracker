@@ -251,7 +251,16 @@ function StatsBar({ stats }) {
   );
 }
 
-function ResumeCard({ resume, onEdit, onDelete, expanded, onToggle }) {
+function ResumeCard({ resume, onEdit, onDelete, onResearch, expanded, onToggle }) {
+  const [researching, setResearching] = useState(false);
+
+  const handleResearch = async (e) => {
+    e.stopPropagation();
+    setResearching(true);
+    await onResearch(resume.resume_id, resume.name);
+    setResearching(false);
+  };
+
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
       <div
@@ -277,6 +286,14 @@ function ResumeCard({ resume, onEdit, onDelete, expanded, onToggle }) {
               Used {resume.usage_count || 0}x
             </span>
             <div className="flex gap-1">
+              <button
+                onClick={handleResearch}
+                disabled={researching}
+                className="p-1.5 text-purple-600 hover:bg-purple-50 rounded disabled:opacity-50"
+                title="Find jobs for this resume"
+              >
+                {researching ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onEdit(resume); }}
                 className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
@@ -968,6 +985,25 @@ export default function App() {
     }
   };
 
+  const handleResearchForResume = async (resumeId, resumeName) => {
+    console.log(`[Frontend] Researching jobs for resume: ${resumeName}`);
+    try {
+      const response = await fetch(`${API_BASE}/research-jobs/${resumeId}`, { method: 'POST' });
+      const data = await response.json();
+
+      if (data.success) {
+        alert(`✨ Claude found ${data.jobs_saved} jobs tailored for "${resumeName}"!`);
+        // Refresh jobs list to show new researched jobs
+        setTimeout(fetchJobs, 2000);
+      } else {
+        alert(`Research failed: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('[Frontend] Job research failed:', err);
+      alert('Job research failed. Check console for details.');
+    }
+  };
+
   const filteredJobs = jobs.filter(job => {
     if (filter.search) {
       const search = filter.search.toLowerCase();
@@ -1247,6 +1283,7 @@ export default function App() {
                       onToggle={() => setExpandedJob(expandedJob === resume.resume_id ? null : resume.resume_id)}
                       onEdit={() => alert('Edit functionality coming soon!')}
                       onDelete={handleDeleteResume}
+                      onResearch={handleResearchForResume}
                     />
                   ))}
                 </div>
