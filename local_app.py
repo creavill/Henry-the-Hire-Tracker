@@ -53,6 +53,9 @@ from bs4 import BeautifulSoup
 # Anthropic Claude AI for job analysis
 import anthropic
 
+# Database backup manager
+from backup_manager import BackupManager, backup_on_startup
+
 # ============== Configuration ==============
 # Load user configuration from config.yaml
 try:
@@ -3537,10 +3540,76 @@ Focus on real, reputable companies and current in-demand roles. Be specific and 
         traceback.print_exc()
         return jsonify({'error': f'Research failed: {str(e)}'}), 500
 
+# ============== Backup API Routes ==============
+
+@app.route('/api/backup/create', methods=['POST'])
+def api_create_backup():
+    """Create a manual database backup."""
+    try:
+        backup_manager = BackupManager(DB_PATH, max_backups=10)
+        backup_path = backup_manager.create_backup()
+
+        if backup_path:
+            return jsonify({
+                'success': True,
+                'message': 'Backup created successfully',
+                'filename': backup_path.name,
+                'path': str(backup_path)
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to create backup'
+            }), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backup/list', methods=['GET'])
+def api_list_backups():
+    """List all available backups."""
+    try:
+        backup_manager = BackupManager(DB_PATH)
+        backups = backup_manager.list_backups()
+        stats = backup_manager.get_backup_stats()
+
+        return jsonify({
+            'backups': backups,
+            'stats': stats
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backup/restore/<filename>', methods=['POST'])
+def api_restore_backup(filename):
+    """Restore database from a backup file."""
+    try:
+        backup_manager = BackupManager(DB_PATH)
+        success = backup_manager.restore_backup(filename)
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'Database restored from {filename}'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Restore failed'
+            }), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     # Initialize database
     init_db()
     RESUMES_DIR.mkdir(exist_ok=True)
+
+    # Create automatic backup on startup
+    print("🔄 Creating automatic backup...")
+    if backup_on_startup(DB_PATH, max_backups=10):
+        print("✅ Backup created successfully")
+    else:
+        print("⚠️  Backup skipped (database may not exist yet)")
 
     # Migrate existing resumes from files to database
     try:
