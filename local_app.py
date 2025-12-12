@@ -40,6 +40,7 @@ from config_loader import get_config
 # Flask web framework for dashboard UI
 from flask import Flask, render_template_string, jsonify, request
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 # Google Gmail API for email scanning
 from google.auth.transport.requests import Request
@@ -3101,6 +3102,107 @@ def create_resume():
 
     except Exception as e:
         print(f"[Backend] Error creating resume: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/resumes/upload', methods=['POST'])
+def upload_resume():
+    """
+    Upload a resume file (PDF, TXT, or MD) and extract text.
+    """
+    print("[Backend] POST /api/resumes/upload")
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    file = request.files['file']
+
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    # Validate file extension
+    allowed_extensions = {'.pdf', '.txt', '.md'}
+    filename = secure_filename(file.filename)
+    file_ext = os.path.splitext(filename)[1].lower()
+
+    if file_ext not in allowed_extensions:
+        return jsonify({'error': f'Invalid file type. Only PDF, TXT, MD allowed'}), 400
+
+    try:
+        # Extract text based on file type
+        if file_ext == '.pdf':
+            # Try to extract PDF text
+            try:
+                from pypdf import PdfReader
+                pdf_reader = PdfReader(file)
+                text_parts = []
+                for page in pdf_reader.pages:
+                    text_parts.append(page.extract_text())
+                resume_text = '\n\n'.join(text_parts)
+
+                if not resume_text.strip():
+                    return jsonify({'error': 'Could not extract text from PDF. It may be scanned or image-based.'}), 400
+
+            except ImportError:
+                return jsonify({
+                    'error': 'PDF support not installed. Install with: pip install pypdf',
+                    'hint': 'For now, please copy text from PDF and use "Paste Text" mode'
+                }), 400
+            except Exception as e:
+                return jsonify({'error': f'PDF extraction failed: {str(e)}'}), 400
+        else:
+            # Text or Markdown file
+            resume_text = file.read().decode('utf-8')
+
+        # Get metadata from form
+        name = request.form.get('name', filename.rsplit('.', 1)[0])
+        focus_areas = request.form.get('focus_areas', '')
+        target_roles = request.form.get('target_roles', '')
+
+        # Generate ID and hash
+        resume_id = str(uuid.uuid4())[:16]
+        content_hash = hashlib.sha256(resume_text.encode()).hexdigest()
+        now = datetime.now().isoformat()
+
+        conn = get_db()
+
+        # Check for duplicate content
+        existing = conn.execute(
+            "SELECT resume_id, name FROM resume_variants WHERE content_hash = ?",
+            (content_hash,)
+        ).fetchone()
+
+        if existing:
+            conn.close()
+            return jsonify({
+                'error': f'This resume already exists as "{existing["name"]}"',
+                'existing_id': existing['resume_id']
+            }), 409
+
+        # Insert new resume
+        conn.execute('''
+            INSERT INTO resume_variants (
+                resume_id, name, focus_areas, target_roles, file_path,
+                content, content_hash, created_at, updated_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ''', (resume_id, name, focus_areas, target_roles, filename,
+              resume_text, content_hash, now, now))
+
+        conn.commit()
+        conn.close()
+
+        print(f"[Backend] Uploaded resume: {name} ({len(resume_text)} chars)")
+        return jsonify({
+            'success': True,
+            'resume_id': resume_id,
+            'name': name,
+            'text_length': len(resume_text),
+            'pages_extracted': resume_text.count('\n\n') + 1 if file_ext == '.pdf' else 1
+        })
+
+    except Exception as e:
+        print(f"[Backend] Error uploading resume: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/resumes/<resume_id>', methods=['PATCH'])

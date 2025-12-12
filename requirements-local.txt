@@ -8,3 +8,6 @@ beautifulsoup4>=4.12.0
 anthropic>=0.40.0
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
+
+# PDF resume upload support (optional - install for PDF upload feature)
+pypdf>=3.17.0

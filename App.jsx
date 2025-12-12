@@ -319,31 +319,90 @@ function ResumeUploadModal({ onClose, onSave }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadMode, setUploadMode] = useState('paste'); // 'paste' or 'file'
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setSelectedFile(file);
+      // Auto-fill name from filename if empty
+      if (!formData.name) {
+        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+        setFormData({ ...formData, name: nameWithoutExt });
+      }
+
+      // Read file content for preview (text files only for now)
+      if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          setFormData({ ...formData, content: event.target.result });
+        };
+        reader.readAsText(file);
+      } else {
+        setFormData({ ...formData, content: `[${file.name} - Text will be extracted on upload]` });
+      }
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
-    if (!formData.name || !formData.content) {
-      setError('Name and content are required');
+    // Validate based on upload mode
+    if (uploadMode === 'file' && !selectedFile) {
+      setError('Please select a file to upload');
+      return;
+    }
+    if (uploadMode === 'paste' && !formData.content) {
+      setError('Please paste resume content');
+      return;
+    }
+    if (!formData.name) {
+      setError('Resume name is required');
       return;
     }
 
     setSaving(true);
     try {
-      const response = await fetch(`${API_BASE}/resumes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      });
+      // Use different endpoints based on mode
+      if (uploadMode === 'file') {
+        // File upload mode - use FormData
+        const uploadFormData = new FormData();
+        uploadFormData.append('file', selectedFile);
+        uploadFormData.append('name', formData.name);
+        uploadFormData.append('focus_areas', formData.focus_areas);
+        uploadFormData.append('target_roles', formData.target_roles);
 
-      const data = await response.json();
+        const response = await fetch(`${API_BASE}/resumes/upload`, {
+          method: 'POST',
+          body: uploadFormData
+        });
 
-      if (response.ok) {
-        onSave();
-        onClose();
+        const data = await response.json();
+
+        if (response.ok) {
+          onSave();
+          onClose();
+        } else {
+          setError(data.error || 'Failed to upload resume');
+        }
       } else {
-        setError(data.error || 'Failed to save resume');
+        // Paste mode - use JSON
+        const response = await fetch(`${API_BASE}/resumes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData)
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          onSave();
+          onClose();
+        } else {
+          setError(data.error || 'Failed to save resume');
+        }
       }
     } catch (err) {
       setError('Network error: ' + err.message);
@@ -365,6 +424,60 @@ function ResumeUploadModal({ onClose, onSave }) {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Upload Mode Toggle */}
+            <div className="flex gap-2 p-1 bg-gray-100 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setUploadMode('file')}
+                className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition ${
+                  uploadMode === 'file'
+                    ? 'bg-white text-gray-900 shadow'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                📎 Upload File
+              </button>
+              <button
+                type="button"
+                onClick={() => setUploadMode('paste')}
+                className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition ${
+                  uploadMode === 'paste'
+                    ? 'bg-white text-gray-900 shadow'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                📝 Paste Text
+              </button>
+            </div>
+
+            {/* File Upload Mode */}
+            {uploadMode === 'file' && (
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                <Upload size={40} className="mx-auto mb-3 text-gray-400" />
+                <label className="cursor-pointer">
+                  <span className="text-sm text-gray-600">
+                    {selectedFile ? (
+                      <span className="text-green-600 font-medium">
+                        ✓ {selectedFile.name}
+                      </span>
+                    ) : (
+                      <>
+                        Click to upload or drag and drop
+                        <br />
+                        <span className="text-xs text-gray-500">PDF, TXT, or MD files</span>
+                      </>
+                    )}
+                  </span>
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Resume Name *
@@ -405,19 +518,22 @@ function ResumeUploadModal({ onClose, onSave }) {
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Resume Content *
-              </label>
-              <textarea
-                placeholder="Paste your resume text here..."
-                value={formData.content}
-                onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
-                rows={12}
-                required
-              />
-            </div>
+            {/* Paste Mode */}
+            {uploadMode === 'paste' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Resume Content *
+                </label>
+                <textarea
+                  placeholder="Paste your resume text here..."
+                  value={formData.content}
+                  onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+                  rows={12}
+                  required={uploadMode === 'paste'}
+                />
+              </div>
+            )}
 
             <div className="flex gap-3 pt-4">
               <button
